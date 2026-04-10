@@ -3,7 +3,7 @@
  *
  * Usage:
  *   import { init, open, hasConversation } from './brand-concierge.js';
- *   init({ supabaseUrl: '...', supabaseAnonKey: '...', siteKey: 'mybrand' });
+ *   init({ supabaseUrl: '...', anonKey: '...', siteKey: 'mybrand' });
  *   open();            // opens modal (empty or with prior conversation)
  *   open('question');  // opens modal and sends question immediately
  *
@@ -19,6 +19,7 @@ let cfg = {
   supabaseUrl: '',
   anonKey: '',
   siteKey: '',
+  brandName: '',
   contactUrl: '',
   title: 'Brand Concierge',
   disclaimer: 'AI responses may be inaccurate and any offers provided are non-binding.',
@@ -34,16 +35,21 @@ const CONTACT_PHRASES = [
 ];
 
 let modal = null;
+let configLoaded = false;
 let questionCount = 0;
 const history = [];
 
 /* ── helpers ──────────────────────────────────────────── */
-function headers() {
+function hdrs() {
   return {
     'Content-Type': 'application/json',
     apikey: cfg.anonKey,
     Authorization: `Bearer ${cfg.anonKey}`,
   };
+}
+
+function toSiteKey(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
 
 function markdownToHtml(md) {
@@ -76,6 +82,129 @@ function isEmail(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim()); }
 function shouldShowContact(text) {
   const lower = text.toLowerCase();
   return CONTACT_PHRASES.some((p) => lower.includes(p)) || questionCount >= 5;
+}
+
+/* ── config API ───────────────────────────────────────── */
+async function loadConfig() {
+  if (!cfg.siteKey || !cfg.supabaseUrl) return false;
+  try {
+    const r = await fetch(
+      `${cfg.supabaseUrl}/functions/v1/brand-config?site_key=${cfg.siteKey}`,
+      { headers: hdrs() },
+    );
+    const c = await r.json();
+    if (c.error) return false;
+    cfg.brandName = c.brand_name || cfg.brandName;
+    cfg.contactUrl = c.contact_url || cfg.contactUrl;
+    cfg.title = `${cfg.brandName} Concierge`;
+    configLoaded = true;
+    return true;
+  } catch { return false; }
+}
+
+async function saveConfig(data) {
+  const key = toSiteKey(data.brandName) || cfg.siteKey;
+  const domains = data.domain.split(',').map((d) => d.trim()).filter(Boolean);
+  const body = {
+    site_key: key,
+    domains,
+    brand_name: data.brandName,
+    instructions: data.instructions || '',
+    vector_store_id: data.vectorStore || null,
+    contact_url: data.contactUrl || null,
+  };
+  try {
+    await fetch(`${cfg.supabaseUrl}/functions/v1/brand-config`, {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify(body),
+    });
+    cfg.siteKey = key;
+    cfg.brandName = data.brandName;
+    cfg.contactUrl = data.contactUrl || '';
+    cfg.title = `${cfg.brandName} Concierge`;
+    configLoaded = true;
+    return true;
+  } catch { return false; }
+}
+
+/* ── config panel ─────────────────────────────────────── */
+function buildConfigPanel(onSaved) {
+  const overlay = document.createElement('div');
+  overlay.className = 'bc-overlay';
+
+  const panel = document.createElement('div');
+  panel.className = 'bc-config-panel';
+
+  const aIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="22" viewBox="0 0 24 22" fill="none"><path d="M14.2353 21.6209L12.4925 16.7699H8.11657L11.7945 7.51237L17.3741 21.6209H24L15.1548 0.379395H8.90929L0 21.6209H14.2353Z" fill="#EB1000"></path></svg>';
+
+  panel.innerHTML = `
+    <div class="bc-config-header">
+      <span class="bc-config-icon">${aIcon}</span>
+      <h3 class="bc-config-title">Configuration</h3>
+    </div>
+    <label class="bc-config-label">Brand Name:
+      <input type="text" class="bcc-brand" placeholder="My Brand" value="${cfg.brandName || ''}">
+    </label>
+    <label class="bc-config-label">Domain:
+      <input type="text" class="bcc-domain" placeholder="example.com">
+    </label>
+    <label class="bc-config-label">Vector Store:
+      <input type="text" class="bcc-vector" placeholder="vs_abc123 (optional)">
+    </label>
+    <label class="bc-config-label">Instructions:
+      <textarea class="bcc-instructions" rows="4" placeholder="Custom system prompt (optional)"></textarea>
+    </label>
+    <label class="bc-config-label">Contact URL:
+      <input type="text" class="bcc-contact" placeholder="https://... (optional)">
+    </label>
+    <div class="bc-config-actions">
+      <button type="button" class="bcc-cancel">Cancel</button>
+      <button type="button" class="bcc-save">Save</button>
+    </div>`;
+
+  // Pre-fill from existing config if available
+  if (cfg.siteKey && configLoaded) {
+    (async () => {
+      try {
+        const r = await fetch(
+          `${cfg.supabaseUrl}/functions/v1/brand-config?site_key=${cfg.siteKey}`,
+          { headers: hdrs() },
+        );
+        const c = await r.json();
+        if (!c.error) {
+          panel.querySelector('.bcc-brand').value = c.brand_name || '';
+          panel.querySelector('.bcc-domain').value = (c.domains || []).join(', ');
+          panel.querySelector('.bcc-vector').value = c.vector_store_id || '';
+          panel.querySelector('.bcc-instructions').value = c.instructions || '';
+          panel.querySelector('.bcc-contact').value = c.contact_url || '';
+        }
+      } catch { /* ignore */ }
+    })();
+  }
+
+  panel.querySelector('.bcc-cancel').addEventListener('click', () => overlay.remove());
+
+  panel.querySelector('.bcc-save').addEventListener('click', async () => {
+    const data = {
+      brandName: panel.querySelector('.bcc-brand').value.trim(),
+      domain: panel.querySelector('.bcc-domain').value.trim(),
+      vectorStore: panel.querySelector('.bcc-vector').value.trim(),
+      instructions: panel.querySelector('.bcc-instructions').value.trim(),
+      contactUrl: panel.querySelector('.bcc-contact').value.trim(),
+    };
+    if (!data.brandName || !data.domain) return;
+    const ok = await saveConfig(data);
+    if (ok) {
+      overlay.remove();
+      if (onSaved) onSaved();
+    }
+  });
+
+  overlay.append(panel);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.append(overlay);
+  return overlay;
 }
 
 /* ── messages ─────────────────────────────────────────── */
@@ -121,7 +250,7 @@ function addMessage(container, text, role, citations, suggestions) {
           link.target = '_blank';
           link.rel = 'noopener';
           link.className = 'bc-suggestion bc-contact';
-          link.textContent = 'Have a rep reach out - or add your email to save time';
+          link.textContent = `Have a ${cfg.brandName || 'brand'} representative reach out`;
           wrap.append(link);
         } else if (q !== '__CONTACT__') {
           const btn = document.createElement('button');
@@ -154,7 +283,7 @@ async function sendMessage(messagesContainer, text) {
   history.push({ role: 'user', content: text });
 
   if (isEmail(text)) {
-    const reply = cfg.emailReply;
+    const reply = `A ${cfg.brandName || ''} representative will be in touch very soon!`;
     addMessage(messagesContainer, reply, 'assistant');
     history.push({ role: 'assistant', content: reply });
     return;
@@ -169,7 +298,7 @@ async function sendMessage(messagesContainer, text) {
   try {
     const resp = await fetch(`${cfg.supabaseUrl}/functions/v1/brand-chat`, {
       method: 'POST',
-      headers: headers(),
+      headers: hdrs(),
       body: JSON.stringify({ message: text, site_key: cfg.siteKey }),
     });
     const data = await resp.json();
@@ -192,7 +321,7 @@ async function sendMessage(messagesContainer, text) {
   }
 }
 
-/* ── modal ────────────────────────────────────────────── */
+/* ── chat modal ───────────────────────────────────────── */
 function closeModal() {
   if (modal) { modal.remove(); modal = null; document.body.style.overflow = ''; }
 }
@@ -209,11 +338,18 @@ function buildModal(initialQuery) {
   header.className = 'bc-header';
   header.innerHTML = `<span class="bc-title">${cfg.title}</span>`;
 
-  const gearBtn = document.createElement('button');
-  gearBtn.className = 'bc-gear';
-  gearBtn.type = 'button';
-  gearBtn.setAttribute('aria-label', 'Settings');
-  gearBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+  // Config button (Adobe A)
+  const configBtn = document.createElement('button');
+  configBtn.className = 'bc-config-btn';
+  configBtn.type = 'button';
+  configBtn.setAttribute('aria-label', 'Configuration');
+  configBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="22" viewBox="0 0 24 22" fill="none"><path d="M14.2353 21.6209L12.4925 16.7699H8.11657L11.7945 7.51237L17.3741 21.6209H24L15.1548 0.379395H8.90929L0 21.6209H14.2353Z" fill="#EB1000"></path></svg>';
+  configBtn.addEventListener('click', () => {
+    buildConfigPanel(() => {
+      // Update title after config save
+      header.querySelector('.bc-title').textContent = cfg.title;
+    });
+  });
 
   const closeBtn = document.createElement('button');
   closeBtn.className = 'bc-close';
@@ -222,57 +358,9 @@ function buildModal(initialQuery) {
   closeBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
   closeBtn.addEventListener('click', closeModal);
 
-  header.append(gearBtn);
+  header.append(configBtn);
   header.append(closeBtn);
   dialog.append(header);
-
-  // Settings panel
-  const settings = document.createElement('div');
-  settings.className = 'bc-settings';
-  settings.innerHTML = `
-    <label>Site Key<input type="text" class="bcs-site-key" value="${cfg.siteKey}"></label>
-    <label>Domains<input type="text" class="bcs-domains" placeholder="example.com"></label>
-    <label>Instructions<textarea class="bcs-instructions" rows="3" placeholder="Custom prompt (optional)"></textarea></label>
-    <label>Vector Store ID<input type="text" class="bcs-vector-store" placeholder="vs_abc123 (optional)"></label>
-    <label>Contact URL<input type="text" class="bcs-contact-url" placeholder="https://..."></label>
-    <div class="bcs-actions"><button type="button" class="bcs-load">Load</button><button type="button" class="bcs-save">Save</button></div>`;
-
-  settings.querySelector('.bcs-load').addEventListener('click', async () => {
-    const key = settings.querySelector('.bcs-site-key').value.trim();
-    if (!key) return;
-    try {
-      const r = await fetch(`${cfg.supabaseUrl}/functions/v1/brand-config?site_key=${key}`, { headers: headers() });
-      const c = await r.json();
-      if (c.error) return;
-      settings.querySelector('.bcs-domains').value = (c.domains || []).join(', ');
-      settings.querySelector('.bcs-instructions').value = c.instructions || '';
-      settings.querySelector('.bcs-vector-store').value = c.vector_store_id || '';
-      settings.querySelector('.bcs-contact-url').value = c.contact_url || '';
-      cfg.siteKey = key;
-      if (c.contact_url) cfg.contactUrl = c.contact_url;
-    } catch { /* ignore */ }
-  });
-
-  settings.querySelector('.bcs-save').addEventListener('click', async () => {
-    const key = settings.querySelector('.bcs-site-key').value.trim();
-    if (!key) return;
-    const domains = settings.querySelector('.bcs-domains').value.split(',').map((d) => d.trim()).filter(Boolean);
-    const body = {
-      site_key: key, domains, brand_name: key,
-      instructions: settings.querySelector('.bcs-instructions').value,
-      vector_store_id: settings.querySelector('.bcs-vector-store').value || null,
-      contact_url: settings.querySelector('.bcs-contact-url').value || null,
-    };
-    try {
-      await fetch(`${cfg.supabaseUrl}/functions/v1/brand-config`, { method: 'POST', headers: headers(), body: JSON.stringify(body) });
-      cfg.siteKey = key;
-      if (body.contact_url) cfg.contactUrl = body.contact_url;
-      settings.classList.remove('active');
-    } catch { /* ignore */ }
-  });
-
-  gearBtn.addEventListener('click', () => settings.classList.toggle('active'));
-  dialog.append(settings);
 
   // Messages
   const messagesWrap = document.createElement('div');
@@ -350,11 +438,15 @@ export function init(options) {
   cfg = { ...cfg, ...options };
 }
 
+export function openConfig(onSaved) {
+  buildConfigPanel(onSaved);
+}
+
 export function hasConversation() {
   return history.length > 0;
 }
 
-export default function open(query) {
+export default async function open(query) {
   if (modal) return;
 
   // Auto-load CSS next to this script
@@ -365,6 +457,18 @@ export default function open(query) {
     const base = thisScript ? thisScript.src.replace(/[^/]+$/, '') : '';
     link.href = `${base}brand-concierge.css`;
     document.head.append(link);
+  }
+
+  // Try to load config; if none exists, show config panel first
+  if (!configLoaded && cfg.siteKey) {
+    const ok = await loadConfig();
+    if (!ok) {
+      buildConfigPanel(() => buildModal(query));
+      return;
+    }
+  } else if (!configLoaded && !cfg.siteKey) {
+    buildConfigPanel(() => buildModal(query));
+    return;
   }
 
   buildModal(query);

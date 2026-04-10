@@ -54,83 +54,111 @@
 
 .bc-close:hover { color: #242727; }
 
-.bc-gear {
+/* config button in header */
+.bc-config-btn {
   position: absolute;
   top: 16px;
   right: 48px;
   background: none;
   border: none;
-  color: #6b7070;
   cursor: pointer;
   padding: 4px;
   display: flex;
   align-items: center;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
 }
 
-.bc-gear:hover { color: #242727; }
+.bc-config-btn:hover { opacity: 1; }
 
-/* settings */
-.bc-settings {
-  display: none;
-  padding: 16px 40px 20px;
-  border-bottom: 1px solid #ccc;
+/* config panel (full-screen overlay) */
+.bc-config-panel {
+  background: #fff;
+  border-radius: 12px;
+  width: 90%;
+  max-width: 380px;
+  padding: 28px 24px;
+  display: flex;
   flex-direction: column;
-  gap: 12px;
-  background: #fafafa;
-  font-size: 13px;
+  gap: 16px;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 15%);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-.bc-settings.active { display: flex; }
+.bc-config-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 
-.bc-settings label {
+.bc-config-icon { display: flex; align-items: center; }
+
+.bc-config-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #242727;
+  margin: 0;
+}
+
+.bc-config-label {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-weight: 500;
-  color: #6b7070;
+  font-size: 13px;
+  font-weight: 600;
+  color: #242727;
 }
 
-.bc-settings input,
-.bc-settings textarea {
+.bc-config-panel input,
+.bc-config-panel textarea {
   font-family: inherit;
-  font-size: 13px;
-  padding: 8px 10px;
-  border: 1px solid #ccc;
+  font-size: 14px;
+  font-weight: 400;
+  padding: 10px 12px;
+  border: 1px solid #e0e0e0;
   border-radius: 6px;
-  background: #fff;
+  background: #fafafa;
   color: #242727;
   outline: none;
 }
 
-.bc-settings input:focus,
-.bc-settings textarea:focus { border-color: #12417c; }
+.bc-config-panel input:focus,
+.bc-config-panel textarea:focus {
+  border-color: #12417c;
+  background: #fff;
+}
 
-.bcs-actions {
+.bc-config-actions {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
 }
 
-.bcs-load,
-.bcs-save {
-  padding: 6px 16px;
+.bcc-cancel {
+  padding: 8px 20px;
+  border: 1px solid #e0e0e0;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  border: 1px solid #ccc;
   background: #fff;
   color: #242727;
 }
 
-.bcs-save {
+.bcc-cancel:hover { background: #f0f0f0; }
+
+.bcc-save {
+  padding: 8px 24px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
   background: #12417c;
-  border-color: #12417c;
   color: #fff;
 }
 
-.bcs-load:hover { background: #f0f0f0; }
-.bcs-save:hover { background: #0c2d56; }
+.bcc-save:hover { background: #0c2d56; }
 
 /* messages */
 .bc-messages-wrap {
