@@ -36,6 +36,7 @@ const CONTACT_PHRASES = [
 
 let modal = null;
 let configLoaded = false;
+let configSaving = null; // promise from auto-save
 let questionCount = 0;
 const history = [];
 
@@ -491,7 +492,7 @@ export function init(options) {
 
   // Auto-save if brand + domain provided
   if (cfg.brandName && cfg.domain && cfg.supabaseUrl) {
-    autoSaveConfig();
+    configSaving = autoSaveConfig();
   }
 }
 
@@ -514,6 +515,12 @@ export default async function open(query) {
     const base = s ? s.src.replace(/[^/]+$/, '') : '';
     link.href = `${base}brand-concierge.css`;
     document.head.append(link);
+  }
+
+  // Wait for any in-flight config save to complete
+  if (configSaving) {
+    await configSaving;
+    configSaving = null;
   }
 
   // Try to load config if not yet loaded
