@@ -37,6 +37,7 @@ const CONTACT_PHRASES = [
 let modal = null;
 let configLoaded = false;
 let configSaving = null; // promise from auto-save
+let initialized = false;
 let questionCount = 0;
 const history = [];
 
@@ -480,6 +481,9 @@ async function autoSaveConfig() {
 
 /* ── public API ───────────────────────────────────────── */
 export function init(options) {
+  if (initialized) return; // prevent re-init loops
+  initialized = true;
+
   cfg = { ...cfg, ...options };
 
   // Auto-derive siteKey from brandName if not set
