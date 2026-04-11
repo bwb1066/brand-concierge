@@ -448,9 +448,54 @@ function buildModal(initialQuery) {
   if (initialQuery) sendMessage(messages, initialQuery);
 }
 
+/* ── auto-save config to Supabase ─────────────────────── */
+async function autoSaveConfig() {
+  if (!cfg.brandName || !cfg.domain || !cfg.supabaseUrl) return;
+  const key = toSiteKey(cfg.brandName);
+  if (!key) return;
+  cfg.siteKey = key;
+  cfg.title = `${cfg.brandName} Concierge`;
+
+  const domains = cfg.domain.split(',').map((d) => d.trim()).filter(Boolean);
+  const body = {
+    site_key: key,
+    domains,
+    brand_name: cfg.brandName,
+    instructions: cfg.instructions || '',
+    vector_store_id: cfg.vectorStoreId || null,
+    contact_url: cfg.contactUrl || null,
+  };
+
+  console.log('[brand-concierge] auto-saving config:', body);
+  try {
+    await fetch(`${cfg.supabaseUrl}/functions/v1/brand-config`, {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify(body),
+    });
+    configLoaded = true;
+    console.log('[brand-concierge] config saved, site_key:', key);
+  } catch (err) {
+    console.error('[brand-concierge] config save failed:', err);
+  }
+}
+
 /* ── public API ───────────────────────────────────────── */
 export function init(options) {
   cfg = { ...cfg, ...options };
+
+  // Auto-derive siteKey from brandName if not set
+  if (!cfg.siteKey && cfg.brandName) {
+    cfg.siteKey = toSiteKey(cfg.brandName);
+  }
+  if (cfg.brandName) {
+    cfg.title = `${cfg.brandName} Concierge`;
+  }
+
+  // Auto-save if brand + domain provided
+  if (cfg.brandName && cfg.domain && cfg.supabaseUrl) {
+    autoSaveConfig();
+  }
 }
 
 export function openConfig(onSaved) {
@@ -468,20 +513,20 @@ export default async function open(query) {
   if (!document.querySelector('link[href*="brand-concierge.css"]')) {
     const link = document.createElement('link');
     link.rel = 'stylesheet';
-    const thisScript = document.querySelector('script[src*="brand-concierge"]');
-    const base = thisScript ? thisScript.src.replace(/[^/]+$/, '') : '';
+    const s = document.querySelector('script[src*="brand-concierge"]');
+    const base = s ? s.src.replace(/[^/]+$/, '') : '';
     link.href = `${base}brand-concierge.css`;
     document.head.append(link);
   }
 
-  // Try to load config; if none exists, show config panel first
+  // Try to load config if not yet loaded
   if (!configLoaded && cfg.siteKey) {
     const ok = await loadConfig();
-    if (!ok) {
+    if (!ok && !cfg.brandName) {
       buildConfigPanel(() => buildModal(query));
       return;
     }
-  } else if (!configLoaded && !cfg.siteKey) {
+  } else if (!configLoaded && !cfg.siteKey && !cfg.brandName) {
     buildConfigPanel(() => buildModal(query));
     return;
   }
@@ -489,14 +534,39 @@ export default async function open(query) {
   buildModal(query);
 }
 
-/* ── auto-init from script data attributes ────────────── */
+/* ── auto-init from script tags or URL params ─────────── */
 (function autoInit() {
-  const el = document.querySelector('script[data-site-key]');
-  if (!el) return;
-  init({
-    supabaseUrl: el.dataset.supabaseUrl || '',
-    anonKey: el.dataset.supabaseAnonKey || '',
-    siteKey: el.dataset.siteKey || '',
-    title: el.dataset.title || cfg.title,
-  });
+  // Try script data attributes first
+  const el = document.querySelector(
+    'script[data-site-key], script[data-brand]',
+  );
+  if (el) {
+    init({
+      supabaseUrl: el.dataset.supabaseUrl || '',
+      anonKey: el.dataset.supabaseAnonKey || '',
+      siteKey: el.dataset.siteKey || '',
+      brandName: el.dataset.brand || '',
+      domain: el.dataset.domain || '',
+      vectorStoreId: el.dataset.vectorStore || '',
+      instructions: el.dataset.instructions || '',
+      contactUrl: el.dataset.contactUrl || '',
+    });
+    return;
+  }
+
+  // Try URL query params
+  const params = new URLSearchParams(window.location.search);
+  const brand = params.get('brand');
+  if (brand) {
+    init({
+      supabaseUrl: params.get('supabase_url')
+        || 'https://cyjquwhkmzyedkwuaffc.supabase.co',
+      anonKey: params.get('anon_key') || '',
+      brandName: brand,
+      domain: params.get('domain') || '',
+      vectorStoreId: params.get('vector_store') || '',
+      instructions: params.get('instructions') || '',
+      contactUrl: params.get('contact_url') || '',
+    });
+  }
 }());
