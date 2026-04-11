@@ -21,7 +21,7 @@ let cfg = {
   siteKey: '',
   brandName: '',
   contactUrl: '',
-  title: 'Brand Concierge',
+  title: 'Ask the Brand Concierge',
   disclaimer: 'AI responses may be inaccurate and any offers provided are non-binding.',
   disclaimerLink: '',
   disclaimerLinkText: '',
@@ -96,7 +96,7 @@ async function loadConfig() {
     if (c.error) return false;
     cfg.brandName = c.brand_name || cfg.brandName;
     cfg.contactUrl = c.contact_url || cfg.contactUrl;
-    cfg.title = `${cfg.brandName} Concierge`;
+    cfg.title = `Ask the ${cfg.brandName} Brand Concierge`;
     configLoaded = true;
     return true;
   } catch { return false; }
@@ -123,7 +123,7 @@ async function saveConfig(data) {
     cfg.siteKey = key;
     cfg.brandName = data.brandName;
     cfg.contactUrl = data.contactUrl || '';
-    cfg.title = `${cfg.brandName} Concierge`;
+    cfg.title = `Ask the ${cfg.brandName} Brand Concierge`;
     configLoaded = true;
     if (changed) {
       history.length = 0;
@@ -359,19 +359,6 @@ function buildModal(initialQuery) {
   header.className = 'bc-header';
   header.innerHTML = `<span class="bc-title">${cfg.title}</span>`;
 
-  // Config button (Adobe A)
-  const configBtn = document.createElement('button');
-  configBtn.className = 'bc-config-btn';
-  configBtn.type = 'button';
-  configBtn.setAttribute('aria-label', 'Configuration');
-  configBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="22" viewBox="0 0 24 22" fill="none"><path d="M14.2353 21.6209L12.4925 16.7699H8.11657L11.7945 7.51237L17.3741 21.6209H24L15.1548 0.379395H8.90929L0 21.6209H14.2353Z" fill="#EB1000"></path></svg>';
-  configBtn.addEventListener('click', () => {
-    buildConfigPanel(() => {
-      // Update title after config save
-      header.querySelector('.bc-title').textContent = cfg.title;
-    });
-  });
-
   const closeBtn = document.createElement('button');
   closeBtn.className = 'bc-close';
   closeBtn.type = 'button';
@@ -379,7 +366,6 @@ function buildModal(initialQuery) {
   closeBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
   closeBtn.addEventListener('click', closeModal);
 
-  header.append(configBtn);
   header.append(closeBtn);
   dialog.append(header);
 
@@ -461,7 +447,7 @@ async function autoSaveConfig() {
   if (!key) return;
   const changed = key !== cfg.siteKey;
   cfg.siteKey = key;
-  cfg.title = `${cfg.brandName} Concierge`;
+  cfg.title = `Ask the ${cfg.brandName} Brand Concierge`;
   if (changed) {
     history.length = 0;
     questionCount = 0;
@@ -500,7 +486,7 @@ export function init(options) {
     cfg.siteKey = toSiteKey(cfg.brandName);
   }
   if (cfg.brandName) {
-    cfg.title = `${cfg.brandName} Concierge`;
+    cfg.title = `Ask the ${cfg.brandName} Brand Concierge`;
   }
 
   // Auto-save if brand + domain provided
