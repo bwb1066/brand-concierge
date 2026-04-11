@@ -481,7 +481,10 @@ async function autoSaveConfig() {
 
 /* ── public API ───────────────────────────────────────── */
 export function init(options) {
-  if (initialized) return; // prevent re-init loops
+  // Skip if already initialized with same brand
+  const newKey = options.siteKey
+    || toSiteKey(options.brandName || '');
+  if (initialized && newKey === cfg.siteKey) return;
   initialized = true;
 
   cfg = { ...cfg, ...options };
