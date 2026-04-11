@@ -154,7 +154,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  if (config.vector_store_id) {
+  if (config.vector_store_id && config.vector_store_id.startsWith("vs_")) {
     tools.push({
       type: "file_search",
       vector_store_ids: [config.vector_store_id],
