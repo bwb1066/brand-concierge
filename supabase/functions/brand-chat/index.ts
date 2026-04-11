@@ -145,10 +145,14 @@ Deno.serve(async (req) => {
   // Build tools array
   const tools: Record<string, unknown>[] = [];
 
-  if (config.domains.length) {
+  const cleanDomains = config.domains
+    .map((d: string) => d.replace(/^https?:\/\//, "").replace(/\/.*$/, "").trim())
+    .filter(Boolean);
+
+  if (cleanDomains.length) {
     tools.push({
       type: "web_search",
-      filters: { allowed_domains: config.domains },
+      filters: { allowed_domains: cleanDomains },
     });
   }
 
