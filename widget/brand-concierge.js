@@ -296,13 +296,27 @@ async function sendMessage(messagesContainer, text) {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
   try {
-    const resp = await fetch(`${cfg.supabaseUrl}/functions/v1/brand-chat`, {
+    const url = `${cfg.supabaseUrl}/functions/v1/brand-chat`;
+    const payload = { message: text, site_key: cfg.siteKey };
+    console.log('[brand-concierge] POST', url, payload);
+
+    const resp = await fetch(url, {
       method: 'POST',
       headers: hdrs(),
-      body: JSON.stringify({ message: text, site_key: cfg.siteKey }),
+      body: JSON.stringify(payload),
     });
+
+    console.log('[brand-concierge] status:', resp.status);
     const data = await resp.json();
+    console.log('[brand-concierge] response:', data);
     thinking.remove();
+
+    if (data.error) {
+      console.error('[brand-concierge] API error:', data.error);
+    }
+    if (data.debug) {
+      console.warn('[brand-concierge] debug:', data.debug);
+    }
 
     let reply = data.text || '';
     const citations = data.citations || [];
@@ -315,7 +329,8 @@ async function sendMessage(messagesContainer, text) {
 
     addMessage(messagesContainer, reply, 'assistant', citations, suggestions);
     history.push({ role: 'assistant', content: reply, citations, suggestions });
-  } catch {
+  } catch (err) {
+    console.error('[brand-concierge] fetch error:', err);
     thinking.remove();
     addMessage(messagesContainer, 'Something went wrong. Please try again.', 'assistant');
   }
