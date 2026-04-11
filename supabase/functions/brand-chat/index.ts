@@ -92,12 +92,10 @@ function defaultInstructions(brand: string, domains: string[]): string {
     `You are a ${brand} brand assistant. ` +
     `Answer questions using information from ${domainList}. ` +
     "Always cite your sources with links. " +
-    "Include appropriate investment disclaimers when discussing " +
-    "funds or performance. " +
     "At the end of every response, suggest 2-3 related follow-up " +
     "questions the user might want to ask. Format them on separate " +
     "lines prefixed with 'SUGGESTED:' (e.g. 'SUGGESTED: What are " +
-    `${brand}'s key strategies?'). ` +
+    `${brand}'s key offerings?'). ` +
     "These must be the very last lines of your response."
   );
 }
