@@ -119,11 +119,17 @@ async function saveConfig(data) {
       headers: hdrs(),
       body: JSON.stringify(body),
     });
+    const changed = key !== cfg.siteKey;
     cfg.siteKey = key;
     cfg.brandName = data.brandName;
     cfg.contactUrl = data.contactUrl || '';
     cfg.title = `${cfg.brandName} Concierge`;
     configLoaded = true;
+    if (changed) {
+      history.length = 0;
+      questionCount = 0;
+      if (modal) { closeModal(); }
+    }
     return true;
   } catch { return false; }
 }
@@ -453,8 +459,13 @@ async function autoSaveConfig() {
   if (!cfg.brandName || !cfg.domain || !cfg.supabaseUrl) return;
   const key = toSiteKey(cfg.brandName);
   if (!key) return;
+  const changed = key !== cfg.siteKey;
   cfg.siteKey = key;
   cfg.title = `${cfg.brandName} Concierge`;
+  if (changed) {
+    history.length = 0;
+    questionCount = 0;
+  }
 
   const domains = cfg.domain.split(',').map((d) => d.trim()).filter(Boolean);
   const body = {
