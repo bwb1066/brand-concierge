@@ -35,6 +35,7 @@ async function embedText(text: string): Promise<number[]> {
 }
 
 interface Product {
+  productName: string;
   productPageUrl: string;
   productDescription: string;
 }
@@ -69,8 +70,8 @@ Deno.serve(async (req) => {
       return json({ error: `Maximum ${MAX_PRODUCTS} products per upload` }, 400);
     }
     for (const p of products) {
-      if (!p.productPageUrl || !p.productDescription) {
-        return json({ error: "Each product needs productPageUrl and productDescription" }, 400);
+      if (!p.productName || !p.productPageUrl || !p.productDescription) {
+        return json({ error: "Each product needs productName, productPageUrl, and productDescription" }, 400);
       }
     }
 
@@ -86,9 +87,10 @@ Deno.serve(async (req) => {
       const rows = await Promise.all(
         batch.map(async (p) => ({
           site_key,
+          product_name: p.productName,
           product_page_url: p.productPageUrl,
           product_description: p.productDescription,
-          embedding: await embedText(p.productDescription),
+          embedding: await embedText(`${p.productName}: ${p.productDescription}`),
         })),
       );
       const { error: insErr } = await sb.from("brand_products").insert(rows);

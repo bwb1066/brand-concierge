@@ -238,7 +238,7 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
       "When the user message begins with [Relevant catalog products:], those products have been " +
       "pre-selected for relevance to the query. Recommend appropriate ones naturally in your response " +
       "and include each recommended product as an UPSELL line at the end:\n" +
-      "UPSELL: <short product title> | <one-sentence reason this fits the user's need> | | <productPageUrl>",
+      "UPSELL: <productName> | <one-sentence reason this fits the user's need> | | <productPageUrl>",
     );
   }
 
@@ -276,7 +276,7 @@ async function retrieveProducts(
   siteKey: string,
   query: string,
   topN = 5,
-): Promise<Array<{ product_page_url: string; product_description: string }>> {
+): Promise<Array<{ product_name: string; product_page_url: string; product_description: string }>> {
   try {
     const embedding = await embedText(query);
     const { data, error } = await sb.rpc("match_products", {
@@ -428,7 +428,7 @@ Deno.serve(async (req) => {
     const products = await retrieveProducts(sb, body.site_key, message);
     if (products.length > 0) {
       const productBlock = products
-        .map((p, i) => `${i + 1}. ${p.product_description}\n   URL: ${p.product_page_url}`)
+        .map((p, i) => `${i + 1}. ${p.product_name}: ${p.product_description}\n   URL: ${p.product_page_url}`)
         .join("\n\n");
       queryInput = `[Relevant catalog products:]\n${productBlock}\n\n[User question:]\n${message}`;
     }
