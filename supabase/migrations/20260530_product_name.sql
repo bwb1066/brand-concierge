@@ -2,7 +2,8 @@
 ALTER TABLE brand_products
   ADD COLUMN IF NOT EXISTS product_name TEXT;
 
--- Update match_products to return product_name
+-- Drop and recreate because return type changed (product_name added)
+DROP FUNCTION IF EXISTS match_products(vector, text, integer);
 CREATE OR REPLACE FUNCTION match_products(
   query_embedding  VECTOR(1536),
   match_site_key   TEXT,
