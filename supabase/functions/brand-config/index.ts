@@ -6,7 +6,7 @@ const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
     "authorization, content-type, apikey, x-client-info",
 };
@@ -63,6 +63,10 @@ Deno.serve(async (req) => {
       instructions: body.instructions || "",
       vector_store_id: body.vector_store_id || null,
       contact_url: body.contact_url || null,
+      open_search_context: body.open_search_context || null,
+      persona: body.persona || null,
+      initial_prompt: body.initial_prompt || null,
+      chat_title: body.chat_title || null,
     };
 
     const { data, error } = await sb
@@ -73,6 +77,21 @@ Deno.serve(async (req) => {
 
     if (error) return json({ error: error.message }, 500);
     return json(data);
+  }
+
+  // DELETE — delete one or many configs by site_key
+  if (req.method === "DELETE") {
+    const body = await req.json().catch(() => ({}));
+    const keys: string[] = body.site_keys || (siteKey ? [siteKey] : []);
+    if (!keys.length) return json({ error: "site_key or site_keys required" }, 400);
+
+    const { error } = await sb
+      .from("brand_configs")
+      .delete()
+      .in("site_key", keys);
+
+    if (error) return json({ error: error.message }, 500);
+    return json({ deleted: keys.length });
   }
 
   return json({ error: "Method not allowed" }, 405);

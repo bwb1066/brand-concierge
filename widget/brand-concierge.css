@@ -267,9 +267,107 @@
 .bc-content li { margin-bottom: 4px; }
 .bc-content strong { font-weight: 600; }
 .bc-content hr { border: none; border-top: 1px solid #ccc; margin: 16px 0; }
+
+.bc-content a {
+  color: #12417c;
+  text-decoration: none;
+  border-bottom: 1.5px solid rgba(18, 65, 124, 0.35);
+  padding-bottom: 1px;
+  transition: background 0.12s, border-color 0.12s;
+  border-radius: 2px;
+}
+
+.bc-content a:hover {
+  background: rgba(18, 65, 124, 0.07);
+  border-bottom-color: #12417c;
+  padding: 1px 3px;
+  margin: 0 -3px;
+}
 .bc-content table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
 .bc-content td { padding: 8px 12px; border: 1px solid #ccc; vertical-align: top; }
 .bc-content tr:first-child td { font-weight: 600; background: rgb(0 0 0 / 4%); }
+
+/* feedback thumbs */
+.bc-feedback {
+  display: flex;
+  gap: 2px;
+  margin-top: 10px;
+}
+
+.bc-thumb {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #ccc;
+  padding: 3px 5px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s ease;
+  line-height: 1;
+}
+
+.bc-thumb:hover { color: #6b7070; }
+.bc-thumb[aria-pressed="true"] { color: #12417c; }
+
+/* book now CTA */
+.bc-book-now {
+  display: block;
+  padding: 12px 20px;
+  margin-top: 16px;
+  background: #12417c;
+  color: #fff;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+.bc-book-now:hover { background: #0c2d56; }
+
+/* upsells */
+.bc-upsells {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.bc-upsell-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #d0d0d0;
+  border-radius: 10px;
+  text-decoration: none;
+  color: #242727;
+  background: #fff;
+  min-width: 180px;
+  flex: 1 1 180px;
+  max-width: 260px;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.bc-upsell-card:hover { box-shadow: 0 2px 12px rgb(0 0 0 / 10%); border-color: #12417c; }
+
+.bc-upsell-title { font-size: 13px; font-weight: 600; color: #242727; }
+
+.bc-upsell-reason { font-size: 12px; color: #6b7070; line-height: 1.4; }
+
+.bc-upsell-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.bc-upsell-price { font-size: 13px; font-weight: 600; color: #242727; }
+
+.bc-upsell-cta { font-size: 12px; color: #12417c; font-weight: 500; }
 
 /* suggestions */
 .bc-suggestions {

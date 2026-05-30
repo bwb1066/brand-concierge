@@ -26,6 +26,8 @@ let cfg = {
   disclaimerLink: '',
   disclaimerLinkText: '',
   emailReply: 'A representative will be in touch very soon!',
+  initialPrompt: 'Ask me a question...',
+  chatTitle: '',
 };
 
 const CONTACT_PHRASES = [
@@ -39,9 +41,26 @@ let configLoaded = false;
 let configSaving = null; // promise from auto-save
 let initialized = false;
 let questionCount = 0;
+let lastResponseId = null;
 const history = [];
+let ratings = {};
 
 /* ── helpers ──────────────────────────────────────────── */
+function ridKey() { return `bc_rid_${cfg.siteKey}`; }
+function loadResponseId() { try { lastResponseId = localStorage.getItem(ridKey()) || null; } catch { lastResponseId = null; } }
+function saveResponseId(id) { try { localStorage.setItem(ridKey(), id); } catch { /* ignore */ } }
+function clearResponseId() { try { localStorage.removeItem(ridKey()); } catch { /* ignore */ } lastResponseId = null; }
+
+function ratKey() { return `bc_ratings_${cfg.siteKey}`; }
+function clearRatings() {
+  Object.keys(ratings).forEach((k) => delete ratings[k]);
+  try { localStorage.removeItem(ratKey()); } catch { /* ignore */ }
+}
+function saveRating(idx, val) {
+  if (val == null) { delete ratings[idx]; } else { ratings[idx] = val; }
+  try { localStorage.setItem(ratKey(), JSON.stringify(ratings)); } catch { /* ignore */ }
+}
+
 function hdrs() {
   return {
     'Content-Type': 'application/json',
@@ -56,7 +75,9 @@ function toSiteKey(name) {
 
 function markdownToHtml(md) {
   let h = md;
-  h = h.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Linkify bare URLs not already inside an href
+  h = h.replace(/(?<!href=["'])(https?:\/\/[^\s<>"')\]]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
   h = h.replace(/^---$/gm, '<hr>');
   h = h.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
   h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
@@ -81,6 +102,24 @@ function markdownToHtml(md) {
 
 function isEmail(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim()); }
 
+function rephraseAsUser(q) {
+  const rewrites = [
+    [/^Want\s+/i, "I'd like "],
+    [/^Would you like\s+/i, "I'd like "],
+    [/^Would you want\s+/i, "I'd like "],
+    [/^Are you interested in\s+/i, "Tell me about "],
+    [/^Interested in\s+/i, "Tell me about "],
+    [/^Looking for\s+/i, "I'm looking for "],
+    [/^Need\s+/i, "I need "],
+  ];
+  for (const [pattern, replacement] of rewrites) {
+    if (pattern.test(q)) {
+      return q.replace(pattern, replacement).replace(/\?$/, '');
+    }
+  }
+  return q;
+}
+
 function shouldShowContact(text) {
   const lower = text.toLowerCase();
   return CONTACT_PHRASES.some((p) => lower.includes(p)) || questionCount >= 5;
@@ -98,7 +137,9 @@ async function loadConfig() {
     if (c.error) return false;
     cfg.brandName = c.brand_name || cfg.brandName;
     cfg.contactUrl = c.contact_url || cfg.contactUrl;
-    cfg.title = `Ask the ${cfg.brandName} Brand Concierge`;
+    cfg.initialPrompt = c.initial_prompt || 'Ask me a question...';
+    cfg.chatTitle = c.chat_title || '';
+    cfg.title = cfg.chatTitle || `Ask the ${cfg.brandName} Brand Concierge`;
     configLoaded = true;
     return true;
   } catch { return false; }
@@ -114,6 +155,7 @@ async function saveConfig(data) {
     instructions: data.instructions || '',
     vector_store_id: data.vectorStore || null,
     contact_url: data.contactUrl || null,
+    open_search_context: data.openSearchContext || null,
   };
   try {
     await fetch(`${cfg.supabaseUrl}/functions/v1/brand-config`, {
@@ -130,6 +172,8 @@ async function saveConfig(data) {
     if (changed) {
       history.length = 0;
       questionCount = 0;
+      clearResponseId();
+      clearRatings();
       if (modal) { closeModal(); }
     }
     return true;
@@ -166,6 +210,9 @@ function buildConfigPanel(onSaved) {
     <label class="bc-config-label">Contact URL:
       <input type="text" class="bcc-contact" placeholder="https://... (optional)">
     </label>
+    <label class="bc-config-label">Web search context:
+      <input type="text" class="bcc-open-search" placeholder="e.g. renting a car from Avis (optional)">
+    </label>
     <div class="bc-config-actions">
       <button type="button" class="bcc-cancel">Cancel</button>
       <button type="button" class="bcc-save">Save</button>
@@ -186,6 +233,7 @@ function buildConfigPanel(onSaved) {
           panel.querySelector('.bcc-vector').value = c.vector_store_id || '';
           panel.querySelector('.bcc-instructions').value = c.instructions || '';
           panel.querySelector('.bcc-contact').value = c.contact_url || '';
+          panel.querySelector('.bcc-open-search').value = c.open_search_context || '';
         }
       } catch { /* ignore */ }
     })();
@@ -200,6 +248,7 @@ function buildConfigPanel(onSaved) {
       vectorStore: panel.querySelector('.bcc-vector').value.trim(),
       instructions: panel.querySelector('.bcc-instructions').value.trim(),
       contactUrl: panel.querySelector('.bcc-contact').value.trim(),
+      openSearchContext: panel.querySelector('.bcc-open-search').value.trim(),
     };
     if (!data.brandName || !data.domain) return;
     const ok = await saveConfig(data);
@@ -216,7 +265,7 @@ function buildConfigPanel(onSaved) {
 }
 
 /* ── messages ─────────────────────────────────────────── */
-function addMessage(container, text, role, citations, suggestions) {
+function addMessage(container, text, role, citations, suggestions, upsells, bookingUrl, messageIdx) {
   const msg = document.createElement('div');
   msg.className = `bc-message bc-${role}`;
 
@@ -248,6 +297,37 @@ function addMessage(container, text, role, citations, suggestions) {
     content.innerHTML = markdownToHtml(text);
     msg.append(content);
 
+    if (bookingUrl) {
+      const bookBtn = document.createElement('a');
+      bookBtn.href = bookingUrl;
+      bookBtn.target = '_blank';
+      bookBtn.rel = 'noopener';
+      bookBtn.className = 'bc-book-now';
+      bookBtn.textContent = 'Reserve now →';
+      msg.append(bookBtn);
+    }
+
+    if (upsells?.length) {
+      const upsellWrap = document.createElement('div');
+      upsellWrap.className = 'bc-upsells';
+      upsells.forEach((u) => {
+        const card = document.createElement('a');
+        card.href = u.url;
+        card.target = '_blank';
+        card.rel = 'noopener';
+        card.className = 'bc-upsell-card';
+        card.innerHTML = `
+          <div class="bc-upsell-title">${u.title}</div>
+          <div class="bc-upsell-reason">${u.reason}</div>
+          <div class="bc-upsell-footer">
+            <span class="bc-upsell-price">${u.price}</span>
+            <span class="bc-upsell-cta">Add to booking →</span>
+          </div>`;
+        upsellWrap.append(card);
+      });
+      msg.append(upsellWrap);
+    }
+
     if (suggestions?.length) {
       const wrap = document.createElement('div');
       wrap.className = 'bc-suggestions';
@@ -267,12 +347,36 @@ function addMessage(container, text, role, citations, suggestions) {
           btn.textContent = q;
           btn.addEventListener('click', async () => {
             wrap.remove();
-            await sendMessage(container, q);
+            await sendMessage(container, rephraseAsUser(q));
           });
           wrap.append(btn);
         }
       });
       if (wrap.children.length) msg.append(wrap);
+    }
+
+    if (messageIdx !== undefined) {
+      const feedback = document.createElement('div');
+      feedback.className = 'bc-feedback';
+      const thumbUp = document.createElement('button');
+      thumbUp.type = 'button';
+      thumbUp.className = 'bc-thumb';
+      thumbUp.setAttribute('aria-label', 'Helpful');
+      thumbUp.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
+      const thumbDown = document.createElement('button');
+      thumbDown.type = 'button';
+      thumbDown.className = 'bc-thumb';
+      thumbDown.setAttribute('aria-label', 'Not helpful');
+      thumbDown.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3z"/><path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg>';
+      const sync = () => {
+        thumbUp.setAttribute('aria-pressed', ratings[messageIdx] === 'up' ? 'true' : 'false');
+        thumbDown.setAttribute('aria-pressed', ratings[messageIdx] === 'down' ? 'true' : 'false');
+      };
+      sync();
+      thumbUp.addEventListener('click', () => { saveRating(messageIdx, ratings[messageIdx] === 'up' ? null : 'up'); sync(); });
+      thumbDown.addEventListener('click', () => { saveRating(messageIdx, ratings[messageIdx] === 'down' ? null : 'down'); sync(); });
+      feedback.append(thumbUp, thumbDown);
+      msg.append(feedback);
     }
   } else {
     msg.textContent = text;
@@ -305,7 +409,7 @@ async function sendMessage(messagesContainer, text) {
 
   try {
     const url = `${cfg.supabaseUrl}/functions/v1/brand-chat`;
-    const payload = { message: text, site_key: cfg.siteKey };
+    const payload = { message: text, site_key: cfg.siteKey, previous_response_id: lastResponseId || undefined };
     console.log('[brand-concierge] POST', url, payload);
 
     const resp = await fetch(url, {
@@ -329,14 +433,23 @@ async function sendMessage(messagesContainer, text) {
     let reply = data.text || '';
     const citations = data.citations || [];
     const suggestions = data.suggestions || [];
+    const upsells = data.upsells || [];
+    const bookingUrl = data.booking_url || null;
     if (data.contactUrl) cfg.contactUrl = data.contactUrl;
+    if (data.thread_reset) {
+      clearResponseId();
+      clearRatings();
+    } else if (data.response_id) {
+      lastResponseId = data.response_id;
+      saveResponseId(data.response_id);
+    }
     if (!reply) reply = "I wasn't able to find an answer. Please try rephrasing your question.";
 
     reply = reply.replace(/【[^】]*】/g, '');
     if (shouldShowContact(text)) suggestions.push('__CONTACT__');
 
-    addMessage(messagesContainer, reply, 'assistant', citations, suggestions);
-    history.push({ role: 'assistant', content: reply, citations, suggestions });
+    addMessage(messagesContainer, reply, 'assistant', citations, suggestions, upsells, bookingUrl, history.length);
+    history.push({ role: 'assistant', content: reply, citations, suggestions, upsells, bookingUrl });
   } catch (err) {
     console.error('[brand-concierge] fetch error:', err);
     thinking.remove();
@@ -397,7 +510,7 @@ function buildModal(initialQuery) {
   inputWrap.className = 'bc-input-wrap';
   const input = document.createElement('textarea');
   input.className = 'bc-input';
-  input.placeholder = 'Ask a question';
+  input.placeholder = cfg.initialPrompt || 'Ask me a question...';
   input.rows = 1;
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${input.scrollHeight}px`; });
   input.addEventListener('keydown', (e) => {
@@ -438,7 +551,7 @@ function buildModal(initialQuery) {
   document.body.style.overflow = 'hidden';
   modal = overlay;
 
-  history.forEach((m) => addMessage(messages, m.content, m.role, m.citations, m.suggestions));
+  history.forEach((m, idx) => addMessage(messages, m.content, m.role, m.citations, m.suggestions, m.upsells, m.bookingUrl, idx));
   if (initialQuery) sendMessage(messages, initialQuery);
 }
 
@@ -453,6 +566,7 @@ async function autoSaveConfig() {
   if (changed) {
     history.length = 0;
     questionCount = 0;
+    clearResponseId();
   }
 
   const domains = cfg.domain.split(',').map((d) => d.trim()).filter(Boolean);
@@ -463,6 +577,7 @@ async function autoSaveConfig() {
     instructions: cfg.instructions || '',
     vector_store_id: cfg.vectorStoreId || null,
     contact_url: cfg.contactUrl || null,
+    open_search_context: cfg.openSearchContext || null,
   };
 
   console.log('[brand-concierge] auto-saving config:', body);
@@ -496,6 +611,8 @@ export function init(options) {
   if (cfg.brandName) {
     cfg.title = `Ask the ${cfg.brandName} Brand Concierge`;
   }
+
+  if (cfg.siteKey) loadResponseId();
 
   // Auto-save if brand + domain provided
   if (cfg.brandName && cfg.domain && cfg.supabaseUrl) {
