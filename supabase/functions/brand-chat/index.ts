@@ -237,8 +237,8 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
     parts.push(
       "When the user message begins with [Relevant catalog products:], those products have been " +
       "pre-selected for relevance to the query. Recommend appropriate ones naturally in your response " +
-      "and include each recommended product as an UPSELL line at the end:\n" +
-      "UPSELL: <productName> | <one-sentence reason this fits the user's need> | | <productPageUrl>",
+      "and include each recommended product as a RECOMMENDATION line at the end:\n" +
+      "RECOMMENDATION: <productName> | <one-sentence reason this fits the user's need> | | <productPageUrl>",
     );
   }
 
@@ -497,10 +497,10 @@ Deno.serve(async (req) => {
     }));
   }
 
-  // Extract SUGGESTED / UPSELL / BOOKING from trailing lines
+  // Extract SUGGESTED / RECOMMENDATION / BOOKING from trailing lines
   const suggestions: string[] = [];
-  interface Upsell { title: string; reason: string; price: string; url: string; image: string; }
-  const upsells: Upsell[] = [];
+  interface Recommendation { title: string; reason: string; price: string; url: string; image: string; }
+  const recommendations: Recommendation[] = [];
   let bookingUrl: string | null = null;
 
   const normalizedLines: string[] = [];
@@ -510,7 +510,7 @@ Deno.serve(async (req) => {
     if (/^SUGGESTED:?\s*$/i.test(trimmed)) { inSuggestedBlock = true; continue; }
     if (inSuggestedBlock) {
       if (!trimmed) continue;
-      if (trimmed.startsWith("UPSELL:") || trimmed.startsWith("BOOKING:") || trimmed.startsWith("SUGGESTED:")) {
+      if (trimmed.startsWith("RECOMMENDATION:") || trimmed.startsWith("BOOKING:") || trimmed.startsWith("SUGGESTED:")) {
         inSuggestedBlock = false; normalizedLines.push(line);
       } else {
         normalizedLines.push(`SUGGESTED: ${trimmed}`);
@@ -528,7 +528,7 @@ Deno.serve(async (req) => {
     const trimmed = reversedLines[i].trim();
     if (!trimmed) continue;
     if (
-      trimmed.startsWith("SUGGESTED:") || trimmed.startsWith("UPSELL:") || trimmed.startsWith("BOOKING:") ||
+      trimmed.startsWith("SUGGESTED:") || trimmed.startsWith("RECOMMENDATION:") || trimmed.startsWith("BOOKING:") ||
       (trimmed.endsWith("?") && trimmed.length > 20)
     ) {
       trailingIndices.push(lines.length - 1 - i);
@@ -538,10 +538,10 @@ Deno.serve(async (req) => {
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (trailingIndices.includes(i)) {
-      if (trimmed.startsWith("UPSELL:")) {
-        const parts = trimmed.replace(/^UPSELL:\s*/, "").split("|").map((p) => p.trim());
+      if (trimmed.startsWith("RECOMMENDATION:")) {
+        const parts = trimmed.replace(/^RECOMMENDATION:\s*/, "").split("|").map((p) => p.trim());
         if (parts.length >= 4) {
-          upsells.push({ title: parts[0], reason: parts[1], price: parts[2], url: parts[3], image: productImageMap.get(parts[3]) || "" });
+          recommendations.push({ title: parts[0], reason: parts[1], price: parts[2], url: parts[3], image: productImageMap.get(parts[3]) || "" });
         }
       } else if (trimmed.startsWith("BOOKING:")) {
         const raw = trimmed.replace(/^BOOKING:\s*/, "");
@@ -572,7 +572,7 @@ Deno.serve(async (req) => {
       text,
       citations,
       suggestions,
-      upsells,
+      recommendations,
       booking_url: bookingUrl || undefined,
       contactUrl: config.contact_url,
       initialPrompt: config.initial_prompt || undefined,
