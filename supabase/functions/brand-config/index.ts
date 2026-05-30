@@ -27,10 +27,8 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const siteKey = url.searchParams.get("site_key");
 
-  // GET — read config by site_key
   if (req.method === "GET") {
     if (!siteKey) {
-      // List all configs
       const { data, error } = await sb
         .from("brand_configs")
         .select("*")
@@ -48,7 +46,6 @@ Deno.serve(async (req) => {
     return json(data);
   }
 
-  // POST/PUT — upsert config
   if (req.method === "POST" || req.method === "PUT") {
     const body = await req.json();
 
@@ -57,16 +54,24 @@ Deno.serve(async (req) => {
     }
 
     const record = {
-      site_key: body.site_key,
-      domains: body.domains || [],
-      brand_name: body.brand_name || "Brand",
-      instructions: body.instructions || "",
-      vector_store_id: body.vector_store_id || null,
-      contact_url: body.contact_url || null,
-      open_search_context: body.open_search_context || null,
-      persona: body.persona || null,
-      initial_prompt: body.initial_prompt || null,
-      chat_title: body.chat_title || null,
+      site_key:                   body.site_key,
+      domains:                    body.domains || [],
+      brand_name:                 body.brand_name || "Brand",
+      instructions:               body.instructions || "",
+      vector_store_id:            body.vector_store_id || null,
+      contact_url:                body.contact_url || null,
+      open_search_context:        body.open_search_context || null,
+      persona:                    body.persona || null,
+      initial_prompt:             body.initial_prompt || null,
+      chat_title:                 body.chat_title || null,
+      disable_citations:          body.disable_citations ?? false,
+      // New fields
+      audience_type:              body.audience_type || "b2c",
+      product_advisory_context:   body.product_advisory_context || null,
+      product_advisory_rules:     body.product_advisory_rules || null,
+      product_advisory_keywords:  body.product_advisory_keywords || null,
+      brand_expression:           body.brand_expression || {},
+      response_length:            body.response_length || "moderate",
     };
 
     const { data, error } = await sb
@@ -79,7 +84,6 @@ Deno.serve(async (req) => {
     return json(data);
   }
 
-  // DELETE — delete one or many configs by site_key
   if (req.method === "DELETE") {
     const body = await req.json().catch(() => ({}));
     const keys: string[] = body.site_keys || (siteKey ? [siteKey] : []);
