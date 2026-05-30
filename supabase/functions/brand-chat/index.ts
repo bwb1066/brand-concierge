@@ -276,7 +276,7 @@ async function retrieveProducts(
   siteKey: string,
   query: string,
   topN = 5,
-): Promise<Array<{ product_name: string; product_page_url: string; product_description: string }>> {
+): Promise<Array<{ product_name: string; product_page_url: string; product_description: string; product_image_url: string | null }>> {
   try {
     const embedding = await embedText(query);
     const { data, error } = await sb.rpc("match_products", {
@@ -422,10 +422,14 @@ Deno.serve(async (req) => {
   const instructions = buildSystemPrompt(config, productCount > 0);
   const maxOutputTokens = RESPONSE_TOKEN_LIMITS[config.response_length || ""] ?? undefined;
 
-  // Retrieve relevant products and inject into query
+  // Retrieve relevant products, build image map, inject into query
   let queryInput = message;
+  const productImageMap = new Map<string, string>();
   if (productCount > 0 && body.site_key) {
     const products = await retrieveProducts(sb, body.site_key, message);
+    for (const p of products) {
+      if (p.product_image_url) productImageMap.set(p.product_page_url, p.product_image_url);
+    }
     if (products.length > 0) {
       const productBlock = products
         .map((p, i) => `${i + 1}. ${p.product_name}: ${p.product_description}\n   URL: ${p.product_page_url}`)
@@ -488,13 +492,14 @@ Deno.serve(async (req) => {
     const citationEntries = [...cleanMap.entries()].slice(0, 3);
     const metaResults = await Promise.all(citationEntries.map(([url]) => fetchMeta(url)));
     citations = citationEntries.map(([url, title], i) => ({
-      url, title, description: metaResults[i].description, image: metaResults[i].image,
+      url, title, description: metaResults[i].description,
+      image: metaResults[i].image || productImageMap.get(url) || "",
     }));
   }
 
   // Extract SUGGESTED / UPSELL / BOOKING from trailing lines
   const suggestions: string[] = [];
-  interface Upsell { title: string; reason: string; price: string; url: string; }
+  interface Upsell { title: string; reason: string; price: string; url: string; image: string; }
   const upsells: Upsell[] = [];
   let bookingUrl: string | null = null;
 
@@ -536,7 +541,7 @@ Deno.serve(async (req) => {
       if (trimmed.startsWith("UPSELL:")) {
         const parts = trimmed.replace(/^UPSELL:\s*/, "").split("|").map((p) => p.trim());
         if (parts.length >= 4) {
-          upsells.push({ title: parts[0], reason: parts[1], price: parts[2], url: parts[3] });
+          upsells.push({ title: parts[0], reason: parts[1], price: parts[2], url: parts[3], image: productImageMap.get(parts[3]) || "" });
         }
       } else if (trimmed.startsWith("BOOKING:")) {
         const raw = trimmed.replace(/^BOOKING:\s*/, "");

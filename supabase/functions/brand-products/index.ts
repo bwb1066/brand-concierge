@@ -38,6 +38,7 @@ interface Product {
   productName: string;
   productPageUrl: string;
   productDescription: string;
+  productImageUrl?: string;
 }
 
 Deno.serve(async (req) => {
@@ -90,6 +91,7 @@ Deno.serve(async (req) => {
           product_name: p.productName,
           product_page_url: p.productPageUrl,
           product_description: p.productDescription,
+          product_image_url: p.productImageUrl || null,
           embedding: await embedText(`${p.productName}: ${p.productDescription}`),
         })),
       );
