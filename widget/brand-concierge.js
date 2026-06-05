@@ -433,7 +433,7 @@ async function sendMessage(messagesContainer, text) {
     let reply = data.text || '';
     const citations = data.citations || [];
     const suggestions = data.suggestions || [];
-    const upsells = data.upsells || [];
+    const upsells = data.recommendations || data.upsells || [];
     const bookingUrl = data.booking_url || null;
     if (data.contactUrl) cfg.contactUrl = data.contactUrl;
     if (data.thread_reset) {

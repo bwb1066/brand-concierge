@@ -426,11 +426,13 @@ Deno.serve(async (req) => {
   let queryInput = message;
   const productImageMap = new Map<string, string>();
   const productNameUrlMap = new Map<string, string>();
+  const productByUrlMap = new Map<string, { name: string; description: string }>();
   if (productCount > 0 && body.site_key) {
     const products = await retrieveProducts(sb, body.site_key, message);
     for (const p of products) {
       if (p.product_image_url) productImageMap.set(p.product_page_url, p.product_image_url);
       productNameUrlMap.set(p.product_name.toLowerCase(), p.product_page_url);
+      productByUrlMap.set(p.product_page_url, { name: p.product_name, description: p.product_description });
     }
     if (products.length > 0) {
       const productBlock = products
@@ -569,6 +571,18 @@ Deno.serve(async (req) => {
   }
   let text = cleanLines.join("\n").trimEnd();
   text = text.replace(/https?:\/\/[^\s)>\]]+/g, (match) => cleanUrl(match));
+
+  // Promote citation URLs that match known products into recommendation cards
+  if (productByUrlMap.size > 0) {
+    const recommendedUrls = new Set(recommendations.map((r) => r.url));
+    citations = citations.filter((c) => {
+      const product = productByUrlMap.get(c.url);
+      if (!product || recommendedUrls.has(c.url)) return true;
+      recommendations.push({ title: product.name, reason: product.description, price: "", url: c.url, image: productImageMap.get(c.url) || c.image });
+      recommendedUrls.add(c.url);
+      return false;
+    });
+  }
 
   return new Response(
     JSON.stringify({
