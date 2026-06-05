@@ -425,10 +425,12 @@ Deno.serve(async (req) => {
   // Retrieve relevant products, build image map, inject into query
   let queryInput = message;
   const productImageMap = new Map<string, string>();
+  const productNameUrlMap = new Map<string, string>();
   if (productCount > 0 && body.site_key) {
     const products = await retrieveProducts(sb, body.site_key, message);
     for (const p of products) {
       if (p.product_image_url) productImageMap.set(p.product_page_url, p.product_image_url);
+      productNameUrlMap.set(p.product_name.toLowerCase(), p.product_page_url);
     }
     if (products.length > 0) {
       const productBlock = products
@@ -541,7 +543,8 @@ Deno.serve(async (req) => {
       if (trimmed.startsWith("RECOMMENDATION:")) {
         const parts = trimmed.replace(/^RECOMMENDATION:\s*/, "").split("|").map((p) => p.trim());
         if (parts.length >= 4) {
-          recommendations.push({ title: parts[0], reason: parts[1], price: parts[2], url: parts[3], image: productImageMap.get(parts[3]) || "" });
+          const realUrl = productNameUrlMap.get(parts[0].toLowerCase()) || parts[3];
+          recommendations.push({ title: parts[0], reason: parts[1], price: parts[2], url: realUrl, image: productImageMap.get(realUrl) || "" });
         }
       } else if (trimmed.startsWith("BOOKING:")) {
         const raw = trimmed.replace(/^BOOKING:\s*/, "");
