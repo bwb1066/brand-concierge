@@ -72,6 +72,7 @@ Deno.serve(async (req) => {
       product_advisory_keywords:  body.product_advisory_keywords || null,
       brand_expression:           body.brand_expression || {},
       response_length:            body.response_length || "moderate",
+      heygen_avatar_id:           body.heygen_avatar_id || null,
     };
 
     const { data, error } = await sb

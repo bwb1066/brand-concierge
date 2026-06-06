@@ -45,6 +45,13 @@ let lastResponseId = null;
 const history = [];
 let ratings = {};
 
+// Avatar state
+let heygenAvatarId = null;
+let heygenEnabled = false;
+let heygenSessionId = null;
+let heygenPeerConn = null;
+let heygenVideoEl = null;
+
 /* ── helpers ──────────────────────────────────────────── */
 function ridKey() { return `bc_rid_${cfg.siteKey}`; }
 function loadResponseId() { try { lastResponseId = localStorage.getItem(ridKey()) || null; } catch { lastResponseId = null; } }
@@ -140,6 +147,7 @@ async function loadConfig() {
     cfg.initialPrompt = c.initial_prompt || 'Ask me a question...';
     cfg.chatTitle = c.chat_title || '';
     cfg.title = cfg.chatTitle || `Ask the ${cfg.brandName} Brand Concierge`;
+    heygenAvatarId = c.heygen_avatar_id || null;
     configLoaded = true;
     return true;
   } catch { return false; }
@@ -448,7 +456,11 @@ async function sendMessage(messagesContainer, text) {
     reply = reply.replace(/【[^】]*】/g, '');
     if (shouldShowContact(text)) suggestions.push('__CONTACT__');
 
-    addMessage(messagesContainer, reply, 'assistant', citations, suggestions, upsells, bookingUrl, history.length);
+    if (heygenEnabled && heygenSessionId) {
+      heygenPost('speak', { session_id: heygenSessionId, text: reply }).catch(console.error);
+    } else {
+      addMessage(messagesContainer, reply, 'assistant', citations, suggestions, upsells, bookingUrl, history.length);
+    }
     history.push({ role: 'assistant', content: reply, citations, suggestions, upsells, bookingUrl });
   } catch (err) {
     console.error('[brand-concierge] fetch error:', err);
@@ -457,8 +469,74 @@ async function sendMessage(messagesContainer, text) {
   }
 }
 
+/* ── heygen avatar ────────────────────────────────────── */
+async function heygenPost(action, body) {
+  const r = await fetch(`${cfg.supabaseUrl}/functions/v1/brand-heygen`, {
+    method: 'POST',
+    headers: hdrs(),
+    body: JSON.stringify({ action, ...body }),
+  });
+  return r.json();
+}
+
+async function startAvatar(videoEl, toggleBtn) {
+  try {
+    toggleBtn.disabled = true;
+    const { session_id, sdp, ice_servers } = await heygenPost('start_session', { avatar_id: heygenAvatarId });
+    if (!session_id) throw new Error('No session');
+
+    const pc = new RTCPeerConnection({ iceServers: ice_servers });
+    heygenPeerConn = pc;
+    heygenSessionId = session_id;
+
+    pc.ontrack = (e) => {
+      if (e.streams?.[0]) videoEl.srcObject = e.streams[0];
+    };
+
+    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    await heygenPost('connect_session', { session_id, sdp: answer });
+
+    heygenEnabled = true;
+    toggleBtn.disabled = false;
+    toggleBtn.setAttribute('aria-pressed', 'true');
+    toggleBtn.title = 'Switch to text';
+    videoEl.classList.remove('bc-avatar-hidden');
+    videoEl.closest('.bc-messages-wrap').querySelector('.bc-messages').classList.add('bc-avatar-hidden');
+  } catch (e) {
+    console.error('[avatar] start failed', e);
+    toggleBtn.disabled = false;
+    heygenEnabled = false;
+    heygenSessionId = null;
+    heygenPeerConn = null;
+  }
+}
+
+async function stopAvatar(videoEl, toggleBtn) {
+  if (heygenSessionId) {
+    heygenPost('stop_session', { session_id: heygenSessionId }).catch(() => {});
+  }
+  if (heygenPeerConn) { heygenPeerConn.close(); heygenPeerConn = null; }
+  heygenSessionId = null;
+  heygenEnabled = false;
+  videoEl.srcObject = null;
+  videoEl.classList.add('bc-avatar-hidden');
+  videoEl.closest('.bc-messages-wrap').querySelector('.bc-messages').classList.remove('bc-avatar-hidden');
+  toggleBtn.setAttribute('aria-pressed', 'false');
+  toggleBtn.title = 'Switch to avatar';
+  toggleBtn.disabled = false;
+}
+
 /* ── chat modal ───────────────────────────────────────── */
 function closeModal() {
+  if (heygenSessionId) {
+    heygenPost('stop_session', { session_id: heygenSessionId }).catch(() => {});
+    if (heygenPeerConn) { heygenPeerConn.close(); heygenPeerConn = null; }
+    heygenSessionId = null;
+    heygenEnabled = false;
+  }
   if (modal) { modal.remove(); modal = null; document.body.style.overflow = ''; }
 }
 
@@ -481,12 +559,33 @@ function buildModal(initialQuery) {
   closeBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
   closeBtn.addEventListener('click', closeModal);
 
+  // Avatar toggle button (only when configured for this site)
+  let avatarToggleBtn = null;
+  if (heygenAvatarId) {
+    avatarToggleBtn = document.createElement('button');
+    avatarToggleBtn.type = 'button';
+    avatarToggleBtn.className = 'bc-avatar-toggle';
+    avatarToggleBtn.setAttribute('aria-pressed', 'false');
+    avatarToggleBtn.title = 'Switch to avatar';
+    avatarToggleBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/><circle cx="18" cy="18" r="3" fill="currentColor" stroke="none"/><path d="M18 16v4M16 18h4" stroke="white" stroke-width="1.5"/></svg>';
+    header.insertBefore(avatarToggleBtn, closeBtn);
+  }
+
   header.append(closeBtn);
   dialog.append(header);
 
   // Messages
   const messagesWrap = document.createElement('div');
   messagesWrap.className = 'bc-messages-wrap';
+
+  // Avatar video element (hidden until toggled on)
+  const videoEl = document.createElement('video');
+  videoEl.className = 'bc-avatar-video bc-avatar-hidden';
+  videoEl.autoplay = true;
+  videoEl.playsInline = true;
+  heygenVideoEl = videoEl;
+  messagesWrap.append(videoEl);
+
   const messages = document.createElement('div');
   messages.className = 'bc-messages';
   messagesWrap.append(messages);
@@ -546,6 +645,17 @@ function buildModal(initialQuery) {
   dialog.append(inputArea);
   overlay.append(dialog);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+
+  // Wire avatar toggle
+  if (avatarToggleBtn) {
+    avatarToggleBtn.addEventListener('click', () => {
+      if (heygenEnabled) {
+        stopAvatar(videoEl, avatarToggleBtn);
+      } else {
+        startAvatar(videoEl, avatarToggleBtn);
+      }
+    });
+  }
 
   document.body.append(overlay);
   document.body.style.overflow = 'hidden';
