@@ -31,10 +31,18 @@ CREATE INDEX IF NOT EXISTS brand_products_site_key_idx ON brand_products(site_ke
 -- CREATE INDEX brand_products_embedding_idx ON brand_products USING hnsw (embedding vector_cosine_ops);
 
 ALTER TABLE brand_products ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon can read brand_products"
-  ON brand_products FOR SELECT TO anon USING (true);
-CREATE POLICY "service role can write brand_products"
-  ON brand_products FOR ALL TO service_role USING (true) WITH CHECK (true);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'brand_products' AND policyname = 'anon can read brand_products'
+  ) THEN
+    CREATE POLICY "anon can read brand_products" ON brand_products FOR SELECT TO anon USING (true);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'brand_products' AND policyname = 'service role can write brand_products'
+  ) THEN
+    CREATE POLICY "service role can write brand_products" ON brand_products FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END $$;
 
 -- Cosine similarity search function used by brand-chat
 CREATE OR REPLACE FUNCTION match_products(
