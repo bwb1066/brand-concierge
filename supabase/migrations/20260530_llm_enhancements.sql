@@ -45,6 +45,7 @@ DO $$ BEGIN
 END $$;
 
 -- Cosine similarity search function used by brand-chat
+DROP FUNCTION IF EXISTS match_products(VECTOR(1536), TEXT, INT);
 CREATE OR REPLACE FUNCTION match_products(
   query_embedding  VECTOR(1536),
   match_site_key   TEXT,
