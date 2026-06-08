@@ -3,12 +3,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ADMIN_TOKEN = Deno.env.get("ADMIN_TOKEN") || SUPABASE_SERVICE_KEY;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers":
-    "authorization, content-type, apikey, x-client-info",
+    "authorization, content-type, apikey, x-client-info, x-admin-token",
 };
 
 function json(body: unknown, status = 200) {
@@ -68,6 +69,9 @@ Deno.serve(async (req) => {
 
   // POST — save a new script version (auto-increments version per site)
   if (req.method === "POST") {
+    const token = (req.headers.get("x-admin-token") || "").trim();
+    if (token !== ADMIN_TOKEN) return json({ error: "Unauthorized" }, 401);
+
     const body = await req.json();
     const { site_key, script_content, widget_version, notes } = body;
 

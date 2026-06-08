@@ -22,7 +22,11 @@ async function heygenPost(path: string, body: unknown) {
     headers: { "Content-Type": "application/json", "X-Api-Key": HEYGEN_API_KEY },
     body: JSON.stringify(body),
   });
-  return r.json();
+  const data = await r.json();
+  if (data.code !== undefined && data.code !== 100) {
+    throw new Error(data.message || `HeyGen error code ${data.code}`);
+  }
+  return data;
 }
 
 Deno.serve(async (req) => {
@@ -32,44 +36,47 @@ Deno.serve(async (req) => {
   const body = await req.json().catch(() => ({}));
   const { action } = body;
 
-  // Create a new streaming session — returns session_id, SDP offer, ICE servers
-  if (action === "start_session") {
-    const { avatar_id, quality = "low" } = body;
-    if (!avatar_id) return json({ error: "avatar_id required" }, 400);
-    const data = await heygenPost("/v1/streaming.new", { avatar_name: avatar_id, quality });
-    if (data.error) return json({ error: data.error }, 502);
-    return json({
-      session_id: data.data?.session_id,
-      sdp: data.data?.sdp,
-      ice_servers: data.data?.ice_servers2 || data.data?.ice_servers || [],
-    });
-  }
+  try {
+    // Create a new streaming session — returns session_id, SDP offer, ICE servers
+    if (action === "start_session") {
+      const { avatar_id, quality = "low" } = body;
+      if (!avatar_id) return json({ error: "avatar_id required" }, 400);
+      const data = await heygenPost("/v1/streaming.new", { avatar_name: avatar_id, quality });
+      return json({
+        session_id: data.data?.session_id,
+        sdp: data.data?.sdp,
+        ice_servers: data.data?.ice_servers2 || data.data?.ice_servers || [],
+      });
+    }
 
-  // Complete WebRTC handshake — send browser's SDP answer
-  if (action === "connect_session") {
-    const { session_id, sdp } = body;
-    if (!session_id || !sdp) return json({ error: "session_id and sdp required" }, 400);
-    const data = await heygenPost("/v1/streaming.start", { session_id, sdp });
-    if (data.error) return json({ error: data.error }, 502);
-    return json({ ok: true });
-  }
+    // Complete WebRTC handshake — send browser's SDP answer
+    if (action === "connect_session") {
+      const { session_id, sdp } = body;
+      if (!session_id || !sdp) return json({ error: "session_id and sdp required" }, 400);
+      await heygenPost("/v1/streaming.start", { session_id, sdp });
+      return json({ ok: true });
+    }
 
-  // Send text for the avatar to speak
-  if (action === "speak") {
-    const { session_id, text } = body;
-    if (!session_id || !text) return json({ error: "session_id and text required" }, 400);
-    const data = await heygenPost("/v1/streaming.task", { session_id, text, task_type: "talk" });
-    if (data.error) return json({ error: data.error }, 502);
-    return json({ ok: true });
-  }
+    // Send text for the avatar to speak
+    if (action === "speak") {
+      const { session_id, text } = body;
+      if (!session_id || !text) return json({ error: "session_id and text required" }, 400);
+      await heygenPost("/v1/streaming.task", { session_id, text, task_type: "talk" });
+      return json({ ok: true });
+    }
 
-  // Stop the session
-  if (action === "stop_session") {
-    const { session_id } = body;
-    if (!session_id) return json({ error: "session_id required" }, 400);
-    await heygenPost("/v1/streaming.stop", { session_id });
-    return json({ ok: true });
-  }
+    // Stop the session
+    if (action === "stop_session") {
+      const { session_id } = body;
+      if (!session_id) return json({ error: "session_id required" }, 400);
+      await heygenPost("/v1/streaming.stop", { session_id });
+      return json({ ok: true });
+    }
 
-  return json({ error: "Unknown action" }, 400);
+    return json({ error: "Unknown action" }, 400);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[brand-heygen]", action, msg);
+    return json({ error: msg }, 502);
+  }
 });

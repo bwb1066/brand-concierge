@@ -4,13 +4,14 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ADMIN_TOKEN = Deno.env.get("ADMIN_TOKEN") || SUPABASE_SERVICE_KEY;
 const MAX_PRODUCTS = 500;
 const EMBED_BATCH = 20;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
+  "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info, x-admin-token",
 };
 
 function json(body: unknown, status = 200) {
@@ -57,6 +58,11 @@ Deno.serve(async (req) => {
       .order("id");
     if (error) return json({ error: error.message }, 500);
     return json({ count: count ?? 0, products: data });
+  }
+
+  if (req.method === "POST" || req.method === "DELETE") {
+    const token = (req.headers.get("x-admin-token") || "").trim();
+    if (token !== ADMIN_TOKEN) return json({ error: "Unauthorized" }, 401);
   }
 
   if (req.method === "POST") {
