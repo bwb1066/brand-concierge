@@ -213,8 +213,8 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
   if (hasProducts) {
     parts.push(
       "When the user message begins with [Relevant catalog products:], those products have been " +
-      "pre-selected for relevance to the query. Recommend appropriate ones naturally in your response " +
-      "and include each recommended product as a RECOMMENDATION line at the end:\n" +
+      "pre-selected for relevance to the query. Recommend appropriate ones naturally in your response. " +
+      "At the very end of your response output each recommended product as a bare RECOMMENDATION line with no heading, section label, or bullet before it:\n" +
       "RECOMMENDATION: <productName> | <one-sentence reason this fits the user's need> | | <productPageUrl>",
     );
   }
@@ -524,20 +524,19 @@ Deno.serve(async (req) => {
 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
-    if (trailingIndices.includes(i)) {
-      if (trimmed.startsWith("RECOMMENDATION:")) {
-        const parts = trimmed.replace(/^RECOMMENDATION:\s*/, "").split("|").map((p) => p.trim());
-        if (parts.length >= 4) {
-          const realUrl = productNameUrlMap.get(parts[0].toLowerCase()) || parts[3];
-          recommendations.push({ title: parts[0], reason: parts[1], price: parts[2], url: realUrl, image: productImageMap.get(realUrl) || "" });
-        }
-      } else {
-        const q = trimmed
-          .replace(/^SUGGESTED:\s*/, "")
-          .replace(/^[-–•*]\s*/, "")
-          .replace(/^\*\*(.+)\*\*$/, "$1");
-        if (q) suggestions.push(q);
+    if (trimmed.startsWith("RECOMMENDATION:")) {
+      // Parse RECOMMENDATION lines wherever they appear in the response
+      const parts = trimmed.replace(/^RECOMMENDATION:\s*/, "").split("|").map((p) => p.trim());
+      if (parts.length >= 4) {
+        const realUrl = productNameUrlMap.get(parts[0].toLowerCase()) || parts[3];
+        recommendations.push({ title: parts[0], reason: parts[1], price: parts[2], url: realUrl, image: productImageMap.get(realUrl) || "" });
       }
+    } else if (trailingIndices.includes(i)) {
+      const q = trimmed
+        .replace(/^SUGGESTED:\s*/, "")
+        .replace(/^[-–•*]\s*/, "")
+        .replace(/^\*\*(.+)\*\*$/, "$1");
+      if (q) suggestions.push(q);
     } else {
       cleanLines.push(lines[i]);
     }
