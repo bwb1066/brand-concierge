@@ -186,6 +186,14 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
     parts.push(base);
   }
 
+  // Always search — prevents AI from answering purely from training knowledge
+  if (config.domains?.length) {
+    parts.push(
+      `Always search ${config.domains.join(", ")} before responding, even for general or educational topics. ` +
+      "Do not answer from memory alone — ground every response in content found on the brand's website.",
+    );
+  }
+
   // Audience framing
   if (config.audience_type === "b2b") {
     parts.push(
@@ -319,6 +327,7 @@ async function callOpenAI(
     tools,
     include: ["web_search_call.action.sources"],
   };
+  if (tools.length > 0) requestBody.tool_choice = "required";
   if (previousResponseId) requestBody.previous_response_id = previousResponseId;
   if (maxOutputTokens) requestBody.max_output_tokens = maxOutputTokens;
 
