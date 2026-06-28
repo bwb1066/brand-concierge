@@ -219,7 +219,7 @@ function buildConfigPanel(onSaved) {
       <input type="text" class="bcc-contact" placeholder="https://... (optional)">
     </label>
     <label class="bc-config-label">Web search context:
-      <input type="text" class="bcc-open-search" placeholder="e.g. renting a car from Avis (optional)">
+      <input type="text" class="bcc-open-search" placeholder="e.g. planning a trip (optional)">
     </label>
     <div class="bc-config-actions">
       <button type="button" class="bcc-cancel">Cancel</button>
@@ -273,7 +273,7 @@ function buildConfigPanel(onSaved) {
 }
 
 /* ── messages ─────────────────────────────────────────── */
-function addMessage(container, text, role, citations, suggestions, upsells, bookingUrl, messageIdx) {
+function addMessage(container, text, role, citations, suggestions, upsells, messageIdx) {
   const msg = document.createElement('div');
   msg.className = `bc-message bc-${role}`;
 
@@ -304,16 +304,6 @@ function addMessage(container, text, role, citations, suggestions, upsells, book
     content.className = 'bc-content';
     content.innerHTML = markdownToHtml(text);
     msg.append(content);
-
-    if (bookingUrl) {
-      const bookBtn = document.createElement('a');
-      bookBtn.href = bookingUrl;
-      bookBtn.target = '_blank';
-      bookBtn.rel = 'noopener';
-      bookBtn.className = 'bc-book-now';
-      bookBtn.textContent = 'Reserve now →';
-      msg.append(bookBtn);
-    }
 
     if (upsells?.length) {
       const upsellWrap = document.createElement('div');
@@ -442,7 +432,6 @@ async function sendMessage(messagesContainer, text) {
     const citations = data.citations || [];
     const suggestions = data.suggestions || [];
     const upsells = data.recommendations || data.upsells || [];
-    const bookingUrl = data.booking_url || null;
     if (data.contactUrl) cfg.contactUrl = data.contactUrl;
     if (data.thread_reset) {
       clearResponseId();
@@ -459,9 +448,9 @@ async function sendMessage(messagesContainer, text) {
     if (heygenEnabled && heygenSessionId) {
       heygenPost('speak', { session_id: heygenSessionId, text: reply }).catch(console.error);
     } else {
-      addMessage(messagesContainer, reply, 'assistant', citations, suggestions, upsells, bookingUrl, history.length);
+      addMessage(messagesContainer, reply, 'assistant', citations, suggestions, upsells, history.length);
     }
-    history.push({ role: 'assistant', content: reply, citations, suggestions, upsells, bookingUrl });
+    history.push({ role: 'assistant', content: reply, citations, suggestions, upsells });
   } catch (err) {
     console.error('[brand-concierge] fetch error:', err);
     thinking.remove();
@@ -661,7 +650,7 @@ function buildModal(initialQuery) {
   document.body.style.overflow = 'hidden';
   modal = overlay;
 
-  history.forEach((m, idx) => addMessage(messages, m.content, m.role, m.citations, m.suggestions, m.upsells, m.bookingUrl, idx));
+  history.forEach((m, idx) => addMessage(messages, m.content, m.role, m.citations, m.suggestions, m.upsells, idx));
   if (initialQuery) sendMessage(messages, initialQuery);
 }
 

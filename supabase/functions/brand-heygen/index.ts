@@ -30,8 +30,8 @@ async function liveAvatarPost(path: string, body: unknown, sessionToken?: string
   });
   const data = await r.json();
   console.log(`[brand-heygen] ${path} http=${r.status}`, JSON.stringify(data));
-  if (!r.ok || (data.code !== undefined && data.code !== 100)) {
-    throw new Error(data.message || `LiveAvatar error ${data.code ?? r.status}`);
+  if (!r.ok) {
+    throw new Error(data.message || data.error?.message || `LiveAvatar error ${r.status}`);
   }
   return data;
 }
@@ -52,6 +52,7 @@ Deno.serve(async (req) => {
       const tokenRes = await liveAvatarPost("/v1/sessions/token", {
         mode: "FULL",
         avatar_id,
+        avatar_persona: {},
         video_settings: { quality, encoding: "VP8" },
       });
       const sessionToken = tokenRes.data?.session_token;

@@ -118,29 +118,6 @@ function cleanUrl(u: string): string {
   }
 }
 
-function buildAvisBookingUrl(params: Record<string, string>): string | null {
-  const { pickup, return: ret, from, to } = params;
-  if (!pickup || !ret || !from || !to) return null;
-  const fromDate = new Date(from);
-  const toDate = new Date(to);
-  if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) return null;
-  const p = new URLSearchParams({
-    dropoff_suggestion_type_code: "AIRPORT",
-    pickup_hour: "12", pickup_location_region: "NAM", pickup_minute: "00",
-    pickup_am_pm: "PM", pickup_suggestion_type_code: "AIRPORT",
-    residency_value: "US", return_hour: "12", return_minute: "00",
-    return_am_pm: "PM", age: "25", country: "us", locale: "en-US", brand: "avis",
-    pickup_location_code: pickup.toUpperCase(),
-    return_location_code: ret.toUpperCase(),
-    pickup_day: String(fromDate.getUTCDate()),
-    pickup_month: String(fromDate.getUTCMonth() + 1),
-    pickup_year: String(fromDate.getUTCFullYear()),
-    return_day: String(toDate.getUTCDate()),
-    return_month: String(toDate.getUTCMonth() + 1),
-    return_year: String(toDate.getUTCFullYear()),
-  });
-  return `https://www.avis.com/en/reservation/vehicle-availability?${p.toString()}`;
-}
 
 async function getConfig(
   sb: ReturnType<typeof createClient>,
@@ -242,6 +219,14 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
     );
   }
 
+  // Suggested follow-up format (always last so the parser can extract them cleanly)
+  parts.push(
+    "At the very end of every response, append 2-3 suggested follow-up questions as bare SUGGESTED: lines " +
+    "with no header, label, or preamble before them:\n" +
+    "SUGGESTED: <follow-up question>\n" +
+    "SUGGESTED: <follow-up question>",
+  );
+
   return parts.filter(Boolean).join("\n\n");
 }
 
@@ -251,7 +236,7 @@ function webSearchInstructions(context: string): string {
     `The user's question has already been answered using the brand's own website. ` +
     `Only add information that is genuinely absent from the brand's site — local tips, destination guides, traveler insights. ` +
     `If the brand search already covered the topic fully, respond with a single short sentence or nothing at all. ` +
-    `Do not repeat rental policies, pricing, vehicle availability, or location details already covered. ` +
+    `Do not repeat pricing, product details, or information already covered in the brand's response. ` +
     `Keep your response to 2-3 sentences maximum. Do not suggest follow-up questions.`
   );
 }
@@ -501,12 +486,10 @@ Deno.serve(async (req) => {
     }));
   }
 
-  // Extract SUGGESTED / RECOMMENDATION / BOOKING from trailing lines
+  // Extract SUGGESTED / RECOMMENDATION from trailing lines
   const suggestions: string[] = [];
   interface Recommendation { title: string; reason: string; price: string; url: string; image: string; }
   const recommendations: Recommendation[] = [];
-  let bookingUrl: string | null = null;
-
   const normalizedLines: string[] = [];
   let inSuggestedBlock = false;
   for (const line of combinedText.split("\n")) {
@@ -514,7 +497,7 @@ Deno.serve(async (req) => {
     if (/^SUGGESTED:?\s*$/i.test(trimmed)) { inSuggestedBlock = true; continue; }
     if (inSuggestedBlock) {
       if (!trimmed) continue;
-      if (trimmed.startsWith("RECOMMENDATION:") || trimmed.startsWith("BOOKING:") || trimmed.startsWith("SUGGESTED:")) {
+      if (trimmed.startsWith("RECOMMENDATION:") || trimmed.startsWith("SUGGESTED:")) {
         inSuggestedBlock = false; normalizedLines.push(line);
       } else {
         normalizedLines.push(`SUGGESTED: ${trimmed}`);
@@ -532,7 +515,7 @@ Deno.serve(async (req) => {
     const trimmed = reversedLines[i].trim();
     if (!trimmed) continue;
     if (
-      trimmed.startsWith("SUGGESTED:") || trimmed.startsWith("RECOMMENDATION:") || trimmed.startsWith("BOOKING:") ||
+      trimmed.startsWith("SUGGESTED:") || trimmed.startsWith("RECOMMENDATION:") ||
       (trimmed.endsWith("?") && trimmed.length > 20)
     ) {
       trailingIndices.push(lines.length - 1 - i);
@@ -548,16 +531,6 @@ Deno.serve(async (req) => {
           const realUrl = productNameUrlMap.get(parts[0].toLowerCase()) || parts[3];
           recommendations.push({ title: parts[0], reason: parts[1], price: parts[2], url: realUrl, image: productImageMap.get(realUrl) || "" });
         }
-      } else if (trimmed.startsWith("BOOKING:")) {
-        const raw = trimmed.replace(/^BOOKING:\s*/, "");
-        const params = Object.fromEntries(
-          raw.split("|").flatMap((seg) => {
-            const eq = seg.indexOf("=");
-            if (eq === -1) return [];
-            return [[seg.slice(0, eq).trim(), seg.slice(eq + 1).trim()]];
-          }),
-        );
-        bookingUrl = buildAvisBookingUrl(params);
       } else {
         const q = trimmed
           .replace(/^SUGGESTED:\s*/, "")
@@ -584,13 +557,29 @@ Deno.serve(async (req) => {
     });
   }
 
+  // Fill in missing images from DB for catalog products not in the top-5
+  const recsNeedingImages = recommendations.filter((r) => !r.image && r.url);
+  if (recsNeedingImages.length > 0 && body.site_key) {
+    const { data: imgRows } = await sb
+      .from("brand_products")
+      .select("product_page_url, product_image_url")
+      .eq("site_key", body.site_key)
+      .in("product_page_url", recsNeedingImages.map((r) => r.url));
+    if (imgRows) {
+      const dbImageMap = new Map(imgRows.map((p) => [p.product_page_url, p.product_image_url]));
+      for (const rec of recsNeedingImages) {
+        const img = dbImageMap.get(rec.url);
+        if (img) rec.image = img;
+      }
+    }
+  }
+
   return new Response(
     JSON.stringify({
       text,
       citations,
       suggestions,
       recommendations,
-      booking_url: bookingUrl || undefined,
       contactUrl: config.contact_url,
       initialPrompt: config.initial_prompt || undefined,
       chatTitle: config.chat_title || undefined,
