@@ -589,10 +589,14 @@ Deno.serve(async (req) => {
     }
   }
 
+  // Only keep resource URLs the AI actually fetched via web search (prevents hallucinated URLs)
+  const citedUrls = new Set([...combinedUrls.keys()].map(cleanUrl));
+  const validResourceRaws = resourceRaws.filter((r) => citedUrls.has(r.url));
+
   // Fetch OG meta for resource articles (cap at 3, run in parallel)
   interface Resource { title: string; teaser: string; url: string; image: string; }
   const resources: Resource[] = await Promise.all(
-    resourceRaws.slice(0, 3).map(async (r) => {
+    validResourceRaws.slice(0, 3).map(async (r) => {
       const meta = await fetchMeta(r.url);
       return { title: r.title, teaser: r.teaser, url: r.url, image: meta.image };
     }),
