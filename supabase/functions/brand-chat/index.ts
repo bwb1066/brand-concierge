@@ -219,6 +219,14 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
     );
   }
 
+  // Long-form content surfacing
+  parts.push(
+    "If your search surfaces relevant educational articles, application notes, guides, or blog posts " +
+    "(not product pages), include up to 3 as bare RESOURCE lines at the very end — after RECOMMENDATION lines, " +
+    "no heading or bullet before them:\n" +
+    "RESOURCE: <articleTitle> | <one-sentence summary of why it is relevant> | <url>",
+  );
+
   // Suggested follow-up format (always last so the parser can extract them cleanly)
   parts.push(
     "At the very end of every response, append 2-3 suggested follow-up questions as bare SUGGESTED: lines " +
@@ -486,10 +494,12 @@ Deno.serve(async (req) => {
     }));
   }
 
-  // Extract SUGGESTED / RECOMMENDATION from trailing lines
+  // Extract SUGGESTED / RECOMMENDATION / RESOURCE from trailing lines
   const suggestions: string[] = [];
   interface Recommendation { title: string; reason: string; price: string; url: string; image: string; }
+  interface ResourceRaw { title: string; teaser: string; url: string; }
   const recommendations: Recommendation[] = [];
+  const resourceRaws: ResourceRaw[] = [];
   const normalizedLines: string[] = [];
   let inSuggestedBlock = false;
   for (const line of combinedText.split("\n")) {
@@ -497,7 +507,7 @@ Deno.serve(async (req) => {
     if (/^SUGGESTED:?\s*$/i.test(trimmed)) { inSuggestedBlock = true; continue; }
     if (inSuggestedBlock) {
       if (!trimmed) continue;
-      if (trimmed.startsWith("RECOMMENDATION:") || trimmed.startsWith("SUGGESTED:")) {
+      if (trimmed.startsWith("RECOMMENDATION:") || trimmed.startsWith("RESOURCE:") || trimmed.startsWith("SUGGESTED:")) {
         inSuggestedBlock = false; normalizedLines.push(line);
       } else {
         normalizedLines.push(`SUGGESTED: ${trimmed}`);
@@ -530,6 +540,12 @@ Deno.serve(async (req) => {
       if (parts.length >= 4) {
         const realUrl = productNameUrlMap.get(parts[0].toLowerCase()) || parts[3];
         recommendations.push({ title: parts[0], reason: parts[1], price: parts[2], url: realUrl, image: productImageMap.get(realUrl) || "" });
+      }
+    } else if (trimmed.startsWith("RESOURCE:")) {
+      // Parse RESOURCE lines wherever they appear in the response
+      const parts = trimmed.replace(/^RESOURCE:\s*/, "").split("|").map((p) => p.trim());
+      if (parts.length >= 3) {
+        resourceRaws.push({ title: parts[0], teaser: parts[1], url: cleanUrl(parts[2]) });
       }
     } else if (trailingIndices.includes(i)) {
       const q = trimmed
@@ -573,12 +589,22 @@ Deno.serve(async (req) => {
     }
   }
 
+  // Fetch OG meta for resource articles (cap at 3, run in parallel)
+  interface Resource { title: string; teaser: string; url: string; image: string; }
+  const resources: Resource[] = await Promise.all(
+    resourceRaws.slice(0, 3).map(async (r) => {
+      const meta = await fetchMeta(r.url);
+      return { title: r.title, teaser: r.teaser, url: r.url, image: meta.image };
+    }),
+  );
+
   return new Response(
     JSON.stringify({
       text,
       citations,
       suggestions,
       recommendations,
+      resources,
       contactUrl: config.contact_url,
       initialPrompt: config.initial_prompt || undefined,
       chatTitle: config.chat_title || undefined,
