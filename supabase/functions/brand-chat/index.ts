@@ -80,13 +80,14 @@ const RESPONSE_TOKEN_LIMITS: Record<string, number> = {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-async function fetchMeta(url: string): Promise<{ description: string; image: string }> {
+async function fetchMeta(url: string): Promise<{ description: string; image: string; ok: boolean }> {
   try {
     const resp = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0" },
       redirect: "follow",
       signal: AbortSignal.timeout(5000),
     });
+    if (!resp.ok) return { description: "", image: "", ok: false };
     const html = await resp.text();
     const getTag = (name: string): string => {
       const re = new RegExp(
@@ -100,9 +101,26 @@ async function fetchMeta(url: string): Promise<{ description: string; image: str
     return {
       description: getTag("og:description") || getTag("description"),
       image: getTag("og:image"),
+      ok: true,
     };
   } catch {
-    return { description: "", image: "" };
+    return { description: "", image: "", ok: false };
+  }
+}
+
+const EDITORIAL_SEGMENTS = new Set([
+  "knowledge-center", "blog", "resources", "articles", "article",
+  "guides", "guide", "news", "learn", "learning", "tutorial", "tutorials",
+  "application-notes", "application-note", "whitepaper", "white-paper",
+  "insights", "education", "library", "case-studies", "case-study",
+]);
+
+function isEditorialUrl(url: string): boolean {
+  try {
+    const segments = new URL(url).pathname.split("/").filter(Boolean);
+    return segments.some((s) => EDITORIAL_SEGMENTS.has(s.toLowerCase()));
+  } catch {
+    return false;
   }
 }
 
@@ -221,10 +239,11 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
 
   // Long-form content surfacing
   parts.push(
-    "If your search surfaces relevant educational articles, application notes, guides, or blog posts " +
-    "(not product pages), include up to 3 as bare RESOURCE lines at the very end — after RECOMMENDATION lines, " +
-    "no heading or bullet before them:\n" +
-    "RESOURCE: <articleTitle> | <one-sentence summary of why it is relevant> | <url>",
+    "When your search returns educational articles, application notes, guides, knowledge-base entries, or blog posts " +
+    "(URLs containing paths like /knowledge-center/, /blog/, /resources/, /guides/, /learn/), " +
+    "you MUST include them as bare RESOURCE lines at the very end — after RECOMMENDATION lines, no heading or bullet:\n" +
+    "RESOURCE: <articleTitle> | <one-sentence summary of why it is relevant> | <url>\n" +
+    "Use the exact URL returned by your search. Include up to 3.",
   );
 
   // Suggested follow-up format (always last so the parser can extract them cleanly)
@@ -476,8 +495,9 @@ Deno.serve(async (req) => {
     if (webDebug) lastDebug = webDebug;
   }
 
-  // Citations
+  // Citations — split into editorial (→ resources) and non-editorial
   let citations: Citation[] = [];
+  const autoResourceUrls: Map<string, string> = new Map(); // url → title
   if (!config.disable_citations) {
     const cleanMap = new Map<string, string>();
     for (const [url, title] of combinedUrls) {
@@ -486,7 +506,15 @@ Deno.serve(async (req) => {
         cleanMap.set(clean, title);
       }
     }
-    const citationEntries = [...cleanMap.entries()].slice(0, 3);
+    const nonEditorialEntries: [string, string][] = [];
+    for (const [url, title] of cleanMap) {
+      if (isEditorialUrl(url)) {
+        autoResourceUrls.set(url, title);
+      } else {
+        nonEditorialEntries.push([url, title]);
+      }
+    }
+    const citationEntries = nonEditorialEntries.slice(0, 3);
     const metaResults = await Promise.all(citationEntries.map(([url]) => fetchMeta(url)));
     citations = citationEntries.map(([url, title], i) => ({
       url, title, description: metaResults[i].description,
@@ -589,18 +617,27 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Only keep resource URLs the AI actually fetched via web search (prevents hallucinated URLs)
-  const citedUrls = new Set([...combinedUrls.keys()].map(cleanUrl));
-  const validResourceRaws = resourceRaws.filter((r) => citedUrls.has(r.url));
-
-  // Fetch OG meta for resource articles (cap at 3, run in parallel)
+  // Merge AI-output RESOURCE: lines with auto-detected editorial citation URLs
+  // AI-explicit resources take priority; fill remaining slots from auto-detected ones
   interface Resource { title: string; teaser: string; url: string; image: string; }
-  const resources: Resource[] = await Promise.all(
-    validResourceRaws.slice(0, 3).map(async (r) => {
+  const explicitResourceUrls = new Set(resourceRaws.map((r) => r.url));
+  const autoEntries = [...autoResourceUrls.entries()]
+    .filter(([url]) => !explicitResourceUrls.has(url))
+    .slice(0, 3);
+
+  const resourceCandidates = await Promise.all([
+    ...resourceRaws.slice(0, 3).map(async (r) => {
       const meta = await fetchMeta(r.url);
-      return { title: r.title, teaser: r.teaser, url: r.url, image: meta.image };
+      return meta.ok ? { title: r.title, teaser: r.teaser, url: r.url, image: meta.image } : null;
     }),
-  );
+    ...autoEntries.map(async ([url, title]) => {
+      const meta = await fetchMeta(url);
+      return meta.ok ? { title, teaser: meta.description, url, image: meta.image } : null;
+    }),
+  ]);
+  const resources: Resource[] = resourceCandidates
+    .filter((r): r is Resource => r !== null)
+    .slice(0, 3);
 
   return new Response(
     JSON.stringify({
