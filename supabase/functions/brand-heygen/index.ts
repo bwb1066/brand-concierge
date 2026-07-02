@@ -16,6 +16,8 @@ function json(body: unknown, status = 200) {
   });
 }
 
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
 async function liveAvatarPost(path: string, body: unknown, sessionToken?: string) {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (sessionToken) {
@@ -23,17 +25,35 @@ async function liveAvatarPost(path: string, body: unknown, sessionToken?: string
   } else {
     headers["X-API-KEY"] = HEYGEN_API_KEY;
   }
-  const r = await fetch(`${LIVEAVATAR_BASE}${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-  const data = await r.json();
-  console.log(`[brand-heygen] ${path} http=${r.status}`, JSON.stringify(data));
-  if (!r.ok) {
-    throw new Error(data.message || data.error?.message || `LiveAvatar error ${r.status}`);
+
+  // LiveAvatar intermittently returns HTML error pages (5xx / gateway / rate
+  // limit) instead of JSON. Retry transient failures, and never blindly
+  // JSON.parse the body — surface the real status + a snippet instead.
+  let lastErr = "";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const r = await fetch(`${LIVEAVATAR_BASE}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    const text = await r.text();
+    let data: any = null;
+    try { data = text ? JSON.parse(text) : {}; } catch { /* non-JSON (HTML error page) */ }
+
+    console.log(`[brand-heygen] ${path} attempt=${attempt} http=${r.status} json=${data !== null}`);
+
+    if (r.ok && data !== null) return data;
+
+    // Prefer a structured message; otherwise report status + a short snippet.
+    lastErr = data?.message || data?.error?.message ||
+      `LiveAvatar HTTP ${r.status}${data === null ? " (non-JSON): " + text.slice(0, 120).replace(/\s+/g, " ").trim() : ""}`;
+
+    // Retry only transient conditions (5xx / 429 / non-JSON body).
+    const transient = r.status >= 500 || r.status === 429 || data === null;
+    if (!transient || attempt === 3) break;
+    await sleep(400 * attempt);
   }
-  return data;
+  throw new Error(lastErr || "LiveAvatar request failed");
 }
 
 Deno.serve(async (req) => {
