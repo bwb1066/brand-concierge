@@ -14,6 +14,8 @@
  *     data-site-key="mybrand"></script>
  */
 
+const WIDGET_VERSION = '2.0.0';
+
 /* ── state ────────────────────────────────────────────── */
 let cfg = {
   supabaseUrl: '',
@@ -28,6 +30,11 @@ let cfg = {
   emailReply: 'A representative will be in touch very soon!',
   initialPrompt: 'Ask me a question...',
   chatTitle: '',
+  showTrigger: false,
+  triggerStyle: 'bubble',
+  triggerLabel: '',
+  widgetBase: '',
+  noCssAutoLoad: false,
 };
 
 const CONTACT_PHRASES = [
@@ -46,10 +53,11 @@ const history = [];
 let ratings = {};
 
 // Avatar state
+let triggerObserver = null;
 let heygenAvatarId = null;
 let heygenEnabled = false;
 let heygenSessionId = null;
-let heygenPeerConn = null;
+let heygenRoom = null;
 let heygenVideoEl = null;
 
 /* ── helpers ──────────────────────────────────────────── */
@@ -153,127 +161,9 @@ async function loadConfig() {
   } catch { return false; }
 }
 
-async function saveConfig(data) {
-  const key = toSiteKey(data.brandName) || cfg.siteKey;
-  const domains = data.domain.split(',').map((d) => d.trim()).filter(Boolean);
-  const body = {
-    site_key: key,
-    domains,
-    brand_name: data.brandName,
-    instructions: data.instructions || '',
-    vector_store_id: data.vectorStore || null,
-    contact_url: data.contactUrl || null,
-    open_search_context: data.openSearchContext || null,
-  };
-  try {
-    await fetch(`${cfg.supabaseUrl}/functions/v1/brand-config`, {
-      method: 'POST',
-      headers: hdrs(),
-      body: JSON.stringify(body),
-    });
-    const changed = key !== cfg.siteKey;
-    cfg.siteKey = key;
-    cfg.brandName = data.brandName;
-    cfg.contactUrl = data.contactUrl || '';
-    cfg.title = `Ask the ${cfg.brandName} Brand Concierge`;
-    configLoaded = true;
-    if (changed) {
-      history.length = 0;
-      questionCount = 0;
-      clearResponseId();
-      clearRatings();
-      if (modal) { closeModal(); }
-    }
-    return true;
-  } catch { return false; }
-}
-
-/* ── config panel ─────────────────────────────────────── */
-function buildConfigPanel(onSaved) {
-  const overlay = document.createElement('div');
-  overlay.className = 'bc-overlay';
-
-  const panel = document.createElement('div');
-  panel.className = 'bc-config-panel';
-
-  const aIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="22" viewBox="0 0 24 22" fill="none"><path d="M14.2353 21.6209L12.4925 16.7699H8.11657L11.7945 7.51237L17.3741 21.6209H24L15.1548 0.379395H8.90929L0 21.6209H14.2353Z" fill="#EB1000"></path></svg>';
-
-  panel.innerHTML = `
-    <div class="bc-config-header">
-      <span class="bc-config-icon">${aIcon}</span>
-      <h3 class="bc-config-title">Configuration</h3>
-    </div>
-    <label class="bc-config-label">Brand Name:
-      <input type="text" class="bcc-brand" placeholder="My Brand" value="${cfg.brandName || ''}">
-    </label>
-    <label class="bc-config-label">Domain:
-      <input type="text" class="bcc-domain" placeholder="example.com">
-    </label>
-    <label class="bc-config-label">Vector Store:
-      <input type="text" class="bcc-vector" placeholder="vs_abc123 (optional)">
-    </label>
-    <label class="bc-config-label">Instructions:
-      <textarea class="bcc-instructions" rows="4" placeholder="Custom system prompt (optional)"></textarea>
-    </label>
-    <label class="bc-config-label">Contact URL:
-      <input type="text" class="bcc-contact" placeholder="https://... (optional)">
-    </label>
-    <label class="bc-config-label">Web search context:
-      <input type="text" class="bcc-open-search" placeholder="e.g. planning a trip (optional)">
-    </label>
-    <div class="bc-config-actions">
-      <button type="button" class="bcc-cancel">Cancel</button>
-      <button type="button" class="bcc-save">Save</button>
-    </div>`;
-
-  // Pre-fill from existing config if available
-  if (cfg.siteKey && configLoaded) {
-    (async () => {
-      try {
-        const r = await fetch(
-          `${cfg.supabaseUrl}/functions/v1/brand-config?site_key=${cfg.siteKey}`,
-          { headers: hdrs() },
-        );
-        const c = await r.json();
-        if (!c.error) {
-          panel.querySelector('.bcc-brand').value = c.brand_name || '';
-          panel.querySelector('.bcc-domain').value = (c.domains || []).join(', ');
-          panel.querySelector('.bcc-vector').value = c.vector_store_id || '';
-          panel.querySelector('.bcc-instructions').value = c.instructions || '';
-          panel.querySelector('.bcc-contact').value = c.contact_url || '';
-          panel.querySelector('.bcc-open-search').value = c.open_search_context || '';
-        }
-      } catch { /* ignore */ }
-    })();
-  }
-
-  panel.querySelector('.bcc-cancel').addEventListener('click', () => overlay.remove());
-
-  panel.querySelector('.bcc-save').addEventListener('click', async () => {
-    const data = {
-      brandName: panel.querySelector('.bcc-brand').value.trim(),
-      domain: panel.querySelector('.bcc-domain').value.trim(),
-      vectorStore: panel.querySelector('.bcc-vector').value.trim(),
-      instructions: panel.querySelector('.bcc-instructions').value.trim(),
-      contactUrl: panel.querySelector('.bcc-contact').value.trim(),
-      openSearchContext: panel.querySelector('.bcc-open-search').value.trim(),
-    };
-    if (!data.brandName || !data.domain) return;
-    const ok = await saveConfig(data);
-    if (ok) {
-      overlay.remove();
-      if (onSaved) onSaved();
-    }
-  });
-
-  overlay.append(panel);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.append(overlay);
-  return overlay;
-}
-
 /* ── messages ─────────────────────────────────────────── */
-function addMessage(container, text, role, citations, suggestions, upsells, messageIdx) {
+function addMessage(container, text, role, citations, suggestions, recommendations, bookingUrl, messageIdx, resources) {
+  container.closest('.bc-dialog')?.classList.add('has-messages');
   const msg = document.createElement('div');
   msg.className = `bc-message bc-${role}`;
 
@@ -305,25 +195,58 @@ function addMessage(container, text, role, citations, suggestions, upsells, mess
     content.innerHTML = markdownToHtml(text);
     msg.append(content);
 
-    if (upsells?.length) {
-      const upsellWrap = document.createElement('div');
-      upsellWrap.className = 'bc-upsells';
-      upsells.forEach((u) => {
+    if (bookingUrl) {
+      const bookBtn = document.createElement('a');
+      bookBtn.href = bookingUrl;
+      bookBtn.target = '_blank';
+      bookBtn.rel = 'noopener';
+      bookBtn.className = 'bc-book-now';
+      bookBtn.textContent = 'Reserve now →';
+      msg.append(bookBtn);
+    }
+
+    if (recommendations?.length) {
+      const recommendationWrap = document.createElement('div');
+      recommendationWrap.className = 'bc-recommendations';
+      recommendations.forEach((u) => {
         const card = document.createElement('a');
         card.href = u.url;
         card.target = '_blank';
         card.rel = 'noopener';
-        card.className = 'bc-upsell-card';
+        card.className = 'bc-recommendation-card';
         card.innerHTML = `
-          <div class="bc-upsell-title">${u.title}</div>
-          <div class="bc-upsell-reason">${u.reason}</div>
-          <div class="bc-upsell-footer">
-            <span class="bc-upsell-price">${u.price}</span>
-            <span class="bc-upsell-cta">Add to booking →</span>
+          ${u.image ? `<img src="${u.image}" alt="" class="bc-recommendation-img">` : ''}
+          <div class="bc-recommendation-title">${u.title}</div>
+          <div class="bc-recommendation-reason">${u.reason}</div>
+          <div class="bc-recommendation-footer">
+            <span class="bc-recommendation-price">${u.price}</span>
+            <span class="bc-recommendation-cta">View in new window</span>
           </div>`;
-        upsellWrap.append(card);
+        recommendationWrap.append(card);
       });
-      msg.append(upsellWrap);
+      msg.append(recommendationWrap);
+    }
+
+    if (resources?.length) {
+      const resourceWrap = document.createElement('div');
+      resourceWrap.className = 'bc-resources';
+      resources.forEach((r) => {
+        const card = document.createElement('a');
+        card.href = r.url;
+        card.target = '_blank';
+        card.rel = 'noopener';
+        card.className = 'bc-resource-card';
+        let html = '';
+        if (r.image) html += `<img src="${r.image}" alt="" class="bc-resource-img">`;
+        html += '<div class="bc-resource-body">';
+        html += `<span class="bc-resource-title">${r.title}</span>`;
+        if (r.teaser) html += `<span class="bc-resource-teaser">${r.teaser}</span>`;
+        html += '<span class="bc-resource-cta">Read article →</span>';
+        html += '</div>';
+        card.innerHTML = html;
+        resourceWrap.append(card);
+      });
+      msg.append(resourceWrap);
     }
 
     if (suggestions?.length) {
@@ -431,7 +354,9 @@ async function sendMessage(messagesContainer, text) {
     let reply = data.text || '';
     const citations = data.citations || [];
     const suggestions = data.suggestions || [];
-    const upsells = data.recommendations || data.upsells || [];
+    const recommendations = data.recommendations || [];
+    const resources = data.resources || [];
+    const bookingUrl = data.booking_url || null;
     if (data.contactUrl) cfg.contactUrl = data.contactUrl;
     if (data.thread_reset) {
       clearResponseId();
@@ -445,12 +370,12 @@ async function sendMessage(messagesContainer, text) {
     reply = reply.replace(/【[^】]*】/g, '');
     if (shouldShowContact(text)) suggestions.push('__CONTACT__');
 
-    if (heygenEnabled && heygenSessionId) {
-      heygenPost('speak', { session_id: heygenSessionId, text: reply }).catch(console.error);
+    if (heygenEnabled && heygenRoom) {
+      heygenSpeak(reply);
     } else {
-      addMessage(messagesContainer, reply, 'assistant', citations, suggestions, upsells, history.length);
+      addMessage(messagesContainer, reply, 'assistant', citations, suggestions, recommendations, bookingUrl, history.length, resources);
     }
-    history.push({ role: 'assistant', content: reply, citations, suggestions, upsells });
+    history.push({ role: 'assistant', content: reply, citations, suggestions, recommendations, bookingUrl, resources });
   } catch (err) {
     console.error('[brand-concierge] fetch error:', err);
     thinking.remove();
@@ -468,55 +393,155 @@ async function heygenPost(action, body) {
   return r.json();
 }
 
+// Send text for the avatar to speak, over the LiveKit agent-control data channel.
+function heygenSpeak(text) {
+  if (!heygenRoom || !text) return;
+  const evt = JSON.stringify({
+    event_id: crypto.randomUUID(),
+    event_type: 'avatar.speak_text',
+    session_id: heygenSessionId,
+    text,
+  });
+  heygenRoom.localParticipant.publishData(
+    new TextEncoder().encode(evt),
+    { reliable: true, topic: 'agent-control' },
+  ).catch(console.error);
+}
+
+// Stop a LiveAvatar session so it doesn't leak toward the concurrency cap.
+// Pass keepalive=true from unload handlers so the request survives the page
+// going away (a normal fetch is cancelled on unload).
+function stopHeygenSession(sessionId, keepalive) {
+  if (!sessionId) return;
+  try {
+    fetch(`${cfg.supabaseUrl}/functions/v1/brand-heygen`, {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({ action: 'stop_session', session_id: sessionId }),
+      keepalive: !!keepalive,
+    }).catch(() => {});
+  } catch { /* ignore */ }
+}
+
+// Register once: if the tab is closed/navigated away while a session is live,
+// tear it down so it isn't left running until LiveAvatar's idle timeout.
+let unloadCleanupRegistered = false;
+function ensureUnloadCleanup() {
+  if (unloadCleanupRegistered) return;
+  unloadCleanupRegistered = true;
+  const handler = () => { if (heygenSessionId) stopHeygenSession(heygenSessionId, true); };
+  window.addEventListener('pagehide', handler);
+  window.addEventListener('beforeunload', handler);
+}
+
+function loadLiveKit() {
+  if (window.LivekitClient) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js';
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Failed to load LiveKit SDK'));
+    document.head.appendChild(s);
+  });
+}
+
 async function startAvatar(videoEl, toggleBtn) {
+  if (!heygenAvatarId) return;
+  let startedSessionId = null; // track so we can reclaim it if startup fails
   try {
     toggleBtn.disabled = true;
-    const { session_id, sdp, ice_servers } = await heygenPost('start_session', { avatar_id: heygenAvatarId });
-    if (!session_id) throw new Error('No session');
+    ensureUnloadCleanup();
+    const result = await heygenPost('start_session', { avatar_id: heygenAvatarId });
+    if (result.error) throw new Error(`LiveAvatar: ${result.error}`);
+    const { session_id, livekit_url, livekit_client_token } = result;
+    startedSessionId = session_id || null;
+    if (!session_id || !livekit_url) throw new Error('No session data in response');
 
-    const pc = new RTCPeerConnection({ iceServers: ice_servers });
-    heygenPeerConn = pc;
+    await loadLiveKit();
+    const { Room, RoomEvent } = window.LivekitClient;
+
+    const room = new Room();
+    heygenRoom = room;
     heygenSessionId = session_id;
 
-    pc.ontrack = (e) => {
-      if (e.streams?.[0]) videoEl.srcObject = e.streams[0];
-    };
-
-    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    await heygenPost('connect_session', { session_id, sdp: answer });
-
-    heygenEnabled = true;
-
+    // Prime the avatar with a greeting the moment it's live. The speak command
+    // goes over the agent-control data channel, but LiveKit only delivers to
+    // participants already connected — if the LiveAvatar agent hasn't joined
+    // yet the command is silently dropped. Rather than guess when/what the
+    // agent is, we retry on a backoff and stop as soon as the avatar reports it
+    // started speaking (agent-response channel).
     const primeName = cfg.chatTitle || `${cfg.brandName ? cfg.brandName + ' ' : ''}Brand Concierge`;
     const primeText = `Hi! I'm ${primeName}. You can type a question below to get started.`;
-    pc.oniceconnectionstatechange = () => {
-      if ((pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') && heygenSessionId === session_id) {
-        pc.oniceconnectionstatechange = null;
-        heygenPost('speak', { session_id, text: primeText }).catch(console.error);
+    let primed = false;
+    let videoLive = false;
+
+    // Any speak acknowledgement means priming (or a later reply) has landed.
+    room.on(RoomEvent.DataReceived, (payload, _p, _k, topic) => {
+      if (topic !== 'agent-response') return;
+      try {
+        const msg = JSON.parse(new TextDecoder().decode(payload));
+        const t = msg.event_type || msg.type;
+        if (t === 'avatar.speak_started' || t === 'agent.speak_started') primed = true;
+      } catch { /* ignore */ }
+    });
+
+    const primeWithRetries = async () => {
+      for (const delay of [500, 1200, 2200, 3500, 5000]) {
+        await new Promise((r) => setTimeout(r, delay));
+        if (primed || !heygenRoom) return;
+        console.log('[avatar] priming attempt');
+        heygenSpeak(primeText);
       }
     };
+
+    room.on(RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind === 'video') {
+        track.attach(videoEl);
+        if (!videoLive) { videoLive = true; primeWithRetries(); }
+      } else if (track.kind === 'audio') {
+        const audioEl = track.attach();
+        document.body.appendChild(audioEl);
+      }
+    });
+    room.on(RoomEvent.TrackUnsubscribed, (track) => {
+      track.detach();
+    });
+
+    await room.connect(livekit_url, livekit_client_token);
+
+    heygenEnabled = true;
     toggleBtn.disabled = false;
     toggleBtn.setAttribute('aria-pressed', 'true');
     toggleBtn.title = 'Switch to text';
+    videoEl.closest('.bc-dialog').classList.add('has-messages');
     videoEl.classList.remove('bc-avatar-hidden');
     videoEl.closest('.bc-messages-wrap').querySelector('.bc-messages').classList.add('bc-avatar-hidden');
   } catch (e) {
-    console.error('[avatar] start failed', e);
+    const msg = e?.message || String(e);
+    console.error('[avatar] start failed:', msg);
+    // If a session was created server-side before startup failed, stop it so
+    // it doesn't leak toward the concurrency cap.
+    if (heygenRoom) { try { heygenRoom.disconnect(); } catch { /* ignore */ } }
+    stopHeygenSession(startedSessionId);
     toggleBtn.disabled = false;
     heygenEnabled = false;
     heygenSessionId = null;
-    heygenPeerConn = null;
+    heygenRoom = null;
+    // Fall back to text mode — add a subtle notice to the chat
+    const messagesEl = videoEl.closest('.bc-messages-wrap')?.querySelector('.bc-messages');
+    if (messagesEl) {
+      const notice = document.createElement('div');
+      notice.className = 'bc-message bc-message--system';
+      notice.textContent = `Avatar unavailable: ${msg}`;
+      messagesEl.appendChild(notice);
+      videoEl.closest('.bc-dialog').classList.add('has-messages');
+    }
   }
 }
 
 async function stopAvatar(videoEl, toggleBtn) {
-  if (heygenSessionId) {
-    heygenPost('stop_session', { session_id: heygenSessionId }).catch(() => {});
-  }
-  if (heygenPeerConn) { heygenPeerConn.close(); heygenPeerConn = null; }
+  stopHeygenSession(heygenSessionId);
+  if (heygenRoom) { heygenRoom.disconnect(); heygenRoom = null; }
   heygenSessionId = null;
   heygenEnabled = false;
   videoEl.srcObject = null;
@@ -530,8 +555,8 @@ async function stopAvatar(videoEl, toggleBtn) {
 /* ── chat modal ───────────────────────────────────────── */
 function closeModal() {
   if (heygenSessionId) {
-    heygenPost('stop_session', { session_id: heygenSessionId }).catch(() => {});
-    if (heygenPeerConn) { heygenPeerConn.close(); heygenPeerConn = null; }
+    stopHeygenSession(heygenSessionId);
+    if (heygenRoom) { heygenRoom.disconnect(); heygenRoom = null; }
     heygenSessionId = null;
     heygenEnabled = false;
   }
@@ -565,8 +590,8 @@ function buildModal(initialQuery) {
     avatarToggleBtn.className = 'bc-avatar-toggle';
     avatarToggleBtn.setAttribute('aria-pressed', 'false');
     avatarToggleBtn.title = 'Switch to avatar';
-    avatarToggleBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/><circle cx="18" cy="18" r="3" fill="currentColor" stroke="none"/><path d="M18 16v4M16 18h4" stroke="white" stroke-width="1.5"/></svg>';
-    header.insertBefore(avatarToggleBtn, closeBtn);
+    avatarToggleBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>';
+    header.append(avatarToggleBtn);
   }
 
   header.append(closeBtn);
@@ -644,7 +669,6 @@ function buildModal(initialQuery) {
   overlay.append(dialog);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
 
-  // Wire avatar toggle
   if (avatarToggleBtn) {
     avatarToggleBtn.addEventListener('click', () => {
       if (heygenEnabled) {
@@ -653,13 +677,14 @@ function buildModal(initialQuery) {
         startAvatar(videoEl, avatarToggleBtn);
       }
     });
+    startAvatar(videoEl, avatarToggleBtn);
   }
 
   document.body.append(overlay);
   document.body.style.overflow = 'hidden';
   modal = overlay;
 
-  history.forEach((m, idx) => addMessage(messages, m.content, m.role, m.citations, m.suggestions, m.upsells, idx));
+  history.forEach((m, idx) => addMessage(messages, m.content, m.role, m.citations, m.suggestions, m.recommendations, m.bookingUrl, idx, m.resources));
   if (initialQuery) sendMessage(messages, initialQuery);
 }
 
@@ -702,6 +727,76 @@ async function autoSaveConfig() {
   }
 }
 
+/* ── floating trigger button ──────────────────────────── */
+const ADOBE_A = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="18" viewBox="0 0 24 22" fill="none"><path d="M14.2353 21.6209L12.4925 16.7699H8.11657L11.7945 7.51237L17.3741 21.6209H24L15.1548 0.379395H8.90929L0 21.6209H14.2353Z" fill="#EB1000"/></svg>';
+
+function buildTrigger() {
+  if (document.getElementById('bc-trigger')) return;
+  const btn = document.createElement('button');
+  btn.id = 'bc-trigger';
+  btn.type = 'button';
+  btn.setAttribute('aria-label', cfg.triggerLabel || `Chat with ${cfg.brandName || 'us'}`);
+
+  if (cfg.triggerStyle === 'tab') {
+    btn.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${ADOBE_A}${cfg.triggerLabel ? `<span style="font-size:11px;font-weight:600;letter-spacing:0.03em;color:#111">${cfg.triggerLabel}</span>` : ''}</div>`;
+    Object.assign(btn.style, {
+      position: 'fixed',
+      top: '15%',
+      right: '0',
+      zIndex: '9999',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '14px 10px',
+      background: '#fff',
+      border: '1.5px solid #111',
+      borderRight: 'none',
+      borderRadius: '8px 0 0 8px',
+      cursor: 'pointer',
+      boxShadow: '-3px 3px 12px rgba(0,0,0,0.12)',
+      fontFamily: 'system-ui, sans-serif',
+      transition: 'box-shadow 0.15s, padding 0.15s',
+    });
+    btn.addEventListener('mouseenter', () => { btn.style.paddingRight = '14px'; btn.style.boxShadow = '-4px 4px 16px rgba(0,0,0,0.18)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.paddingRight = '10px'; btn.style.boxShadow = '-3px 3px 12px rgba(0,0,0,0.12)'; });
+  } else {
+    btn.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>${cfg.triggerLabel ? `<span>${cfg.triggerLabel}</span>` : ''}`;
+    Object.assign(btn.style, {
+      position: 'fixed',
+      bottom: '24px',
+      right: '24px',
+      zIndex: '9999',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: cfg.triggerLabel ? '12px 18px' : '14px',
+      background: '#12417c',
+      color: '#fff',
+      border: 'none',
+      borderRadius: cfg.triggerLabel ? '28px' : '50%',
+      cursor: 'pointer',
+      boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+      fontSize: '15px',
+      fontFamily: 'system-ui, sans-serif',
+      fontWeight: '600',
+      transition: 'transform 0.15s, box-shadow 0.15s',
+    });
+    btn.addEventListener('mouseenter', () => { btn.style.transform = 'scale(1.06)'; btn.style.boxShadow = '0 6px 20px rgba(0,0,0,0.3)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.transform = ''; btn.style.boxShadow = '0 4px 16px rgba(0,0,0,0.25)'; });
+  }
+
+  btn.addEventListener('click', () => open());
+  document.body.appendChild(btn);
+
+  // Re-inject if an SPA (e.g. React hydration) removes the trigger
+  if (!triggerObserver) {
+    triggerObserver = new MutationObserver(() => {
+      if (!document.getElementById('bc-trigger')) buildTrigger();
+    });
+  }
+  triggerObserver.observe(document.body, { childList: true });
+}
+
 /* ── public API ───────────────────────────────────────── */
 export function init(options) {
   // Skip if already initialized with same brand
@@ -726,10 +821,14 @@ export function init(options) {
   if (cfg.brandName && cfg.domain && cfg.supabaseUrl) {
     configSaving = autoSaveConfig();
   }
-}
 
-export function openConfig(onSaved) {
-  buildConfigPanel(onSaved);
+  if (cfg.showTrigger) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', buildTrigger);
+    } else {
+      buildTrigger();
+    }
+  }
 }
 
 export function hasConversation() {
@@ -739,12 +838,12 @@ export function hasConversation() {
 export default async function open(query) {
   if (modal) return;
 
-  // Auto-load CSS next to this script
-  if (!document.querySelector('link[href*="brand-concierge.css"]')) {
+  // Auto-load CSS next to this script (skip if TM injected it already)
+  if (!cfg.noCssAutoLoad && !document.querySelector('link[href*="brand-concierge.css"]')) {
     const link = document.createElement('link');
     link.rel = 'stylesheet';
     const s = document.querySelector('script[src*="brand-concierge"]');
-    const base = s ? s.src.replace(/[^/]+$/, '') : '';
+    const base = cfg.widgetBase || (s ? s.src.replace(/[^/]+$/, '') : '');
     link.href = `${base}brand-concierge.css`;
     document.head.append(link);
   }
@@ -757,14 +856,7 @@ export default async function open(query) {
 
   // Try to load config if not yet loaded
   if (!configLoaded && cfg.siteKey) {
-    const ok = await loadConfig();
-    if (!ok && !cfg.brandName) {
-      buildConfigPanel(() => buildModal(query));
-      return;
-    }
-  } else if (!configLoaded && !cfg.siteKey && !cfg.brandName) {
-    buildConfigPanel(() => buildModal(query));
-    return;
+    await loadConfig();
   }
 
   buildModal(query);
@@ -786,6 +878,9 @@ export default async function open(query) {
       vectorStoreId: el.dataset.vectorStore || '',
       instructions: el.dataset.instructions || '',
       contactUrl: el.dataset.contactUrl || '',
+      showTrigger: el.dataset.showTrigger === 'true',
+      triggerStyle: el.dataset.triggerStyle || 'bubble',
+      triggerLabel: el.dataset.triggerLabel || '',
     });
     return;
   }

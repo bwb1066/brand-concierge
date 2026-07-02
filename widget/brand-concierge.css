@@ -17,12 +17,16 @@
   border-radius: 12px;
   width: 60%;
   max-width: 1100px;
-  height: 75vh;
+  height: auto;
   display: flex;
   flex-direction: column;
   position: relative;
   box-shadow: 0 20px 60px rgb(0 0 0 / 15%);
   overflow: hidden;
+}
+
+.bc-dialog.has-messages {
+  height: 75vh;
 }
 
 /* header */
@@ -54,97 +58,9 @@
 
 .bc-close:hover { color: #242727; }
 
-/* config panel (full-screen overlay) */
-.bc-config-panel {
-  background: #fff;
-  border-radius: 12px;
-  width: 90%;
-  max-width: 380px;
-  padding: 28px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  box-shadow: 0 20px 60px rgb(0 0 0 / 15%);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-.bc-config-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.bc-config-icon { display: flex; align-items: center; }
-
-.bc-config-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #242727;
-  margin: 0;
-}
-
-.bc-config-label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #242727;
-}
-
-.bc-config-panel input,
-.bc-config-panel textarea {
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 400;
-  padding: 10px 12px;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  background: #fafafa;
-  color: #242727;
-  outline: none;
-}
-
-.bc-config-panel input:focus,
-.bc-config-panel textarea:focus {
-  border-color: #12417c;
-  background: #fff;
-}
-
-.bc-config-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.bcc-cancel {
-  padding: 8px 20px;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  background: #fff;
-  color: #242727;
-}
-
-.bcc-cancel:hover { background: #f0f0f0; }
-
-.bcc-save {
-  padding: 8px 24px;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  background: #12417c;
-  color: #fff;
-}
-
-.bcc-save:hover { background: #0c2d56; }
-
 /* messages */
 .bc-messages-wrap {
+  display: none;
   flex: 1;
   position: relative;
   overflow: hidden;
@@ -177,6 +93,10 @@
 .bc-avatar-toggle:hover { color: #242727; background: #f1f3f5; }
 .bc-avatar-toggle[aria-pressed="true"] { color: #12417c; }
 
+.bc-dialog.has-messages .bc-messages-wrap {
+  display: block;
+}
+
 .bc-messages {
   position: absolute;
   inset: 0;
@@ -192,6 +112,15 @@
   line-height: 1.6;
   max-width: 90%;
   overflow-wrap: break-word;
+}
+
+.bc-message--system {
+  align-self: center;
+  font-size: 12px;
+  color: #888;
+  max-width: 100%;
+  text-align: center;
+  padding: 4px 0;
 }
 
 .bc-user {
@@ -354,15 +283,15 @@
 
 .bc-book-now:hover { background: #0c2d56; }
 
-/* upsells */
-.bc-upsells {
+/* recommendations */
+.bc-recommendations {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 16px;
 }
 
-.bc-upsell-card {
+.bc-recommendation-card {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -378,22 +307,85 @@
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
-.bc-upsell-card:hover { box-shadow: 0 2px 12px rgb(0 0 0 / 10%); border-color: #12417c; }
+.bc-recommendation-card:hover { box-shadow: 0 2px 12px rgb(0 0 0 / 10%); border-color: #12417c; }
 
-.bc-upsell-title { font-size: 13px; font-weight: 600; color: #242727; }
+.bc-recommendation-img {
+  width: 100%;
+  height: 110px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #f5f5f5;
+  margin-bottom: 4px;
+}
 
-.bc-upsell-reason { font-size: 12px; color: #6b7070; line-height: 1.4; }
+.bc-recommendation-title { font-size: 13px; font-weight: 600; color: #242727; }
 
-.bc-upsell-footer {
+.bc-recommendation-reason { font-size: 12px; color: #6b7070; line-height: 1.4; }
+
+.bc-recommendation-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-top: 6px;
 }
 
-.bc-upsell-price { font-size: 13px; font-weight: 600; color: #242727; }
+.bc-recommendation-price { font-size: 13px; font-weight: 600; color: #242727; }
 
-.bc-upsell-cta { font-size: 12px; color: #12417c; font-weight: 500; }
+.bc-recommendation-cta { font-size: 12px; color: #12417c; font-weight: 500; }
+
+/* resource cards (long-form content) */
+.bc-resources {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  margin-top: 16px;
+}
+
+.bc-resource-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: 240px;
+  flex-shrink: 0;
+  border: 1px solid #d0d0d0;
+  border-left: 3px solid #12417c;
+  border-radius: 10px;
+  overflow: hidden;
+  text-decoration: none;
+  color: #242727;
+  background: #fff;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.bc-resource-card:hover { box-shadow: 0 2px 12px rgb(0 0 0 / 10%); border-left-color: #0a2a52; }
+
+.bc-resource-img { width: 100%; height: 100px; object-fit: cover; display: block; }
+
+.bc-resource-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+
+.bc-resource-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.bc-resource-teaser {
+  font-size: 11px;
+  color: #6b7070;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+}
+
+.bc-resource-cta { font-size: 12px; color: #12417c; font-weight: 500; margin-top: 6px; }
 
 /* suggestions */
 .bc-suggestions {
