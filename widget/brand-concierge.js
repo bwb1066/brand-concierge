@@ -482,6 +482,14 @@ async function startAvatar(videoEl, toggleBtn) {
       if (e.streams?.[0]) videoEl.srcObject = e.streams[0];
     };
 
+    videoEl.addEventListener('playing', () => {
+      const name = cfg.chatTitle || `${cfg.brandName ? cfg.brandName + ' ' : ''}Brand Concierge`;
+      heygenPost('speak', {
+        session_id: heygenSessionId,
+        text: `Hi! I'm ${name}. You can type a question below to get started.`,
+      }).catch(console.error);
+    }, { once: true });
+
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
