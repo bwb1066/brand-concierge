@@ -482,14 +482,6 @@ async function startAvatar(videoEl, toggleBtn) {
       if (e.streams?.[0]) videoEl.srcObject = e.streams[0];
     };
 
-    videoEl.addEventListener('playing', () => {
-      const name = cfg.chatTitle || `${cfg.brandName ? cfg.brandName + ' ' : ''}Brand Concierge`;
-      heygenPost('speak', {
-        session_id: heygenSessionId,
-        text: `Hi! I'm ${name}. You can type a question below to get started.`,
-      }).catch(console.error);
-    }, { once: true });
-
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -497,6 +489,16 @@ async function startAvatar(videoEl, toggleBtn) {
     await heygenPost('connect_session', { session_id, sdp: answer });
 
     heygenEnabled = true;
+
+    const _primeName = cfg.chatTitle || `${cfg.brandName ? cfg.brandName + ' ' : ''}Brand Concierge`;
+    setTimeout(() => {
+      if (heygenSessionId === session_id) {
+        heygenPost('speak', {
+          session_id,
+          text: `Hi! I'm ${_primeName}. You can type a question below to get started.`,
+        }).catch(console.error);
+      }
+    }, 1500);
     toggleBtn.disabled = false;
     toggleBtn.setAttribute('aria-pressed', 'true');
     toggleBtn.title = 'Switch to text';
