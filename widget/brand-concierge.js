@@ -48,9 +48,15 @@ let ratings = {};
 // Avatar state
 let heygenAvatarId = null;
 let heygenEnabled = false;
-let heygenSessionId = null;
-let heygenPeerConn = null;
+let heygenSession = null; // LiveAvatarSession instance (LiveKit-backed)
 let heygenVideoEl = null;
+let liveAvatarSDK = null; // cached dynamic import of @heygen/liveavatar-web-sdk
+
+const LIVEAVATAR_SDK_URL = 'https://esm.sh/@heygen/liveavatar-web-sdk@0.0.18';
+async function loadLiveAvatarSDK() {
+  if (!liveAvatarSDK) liveAvatarSDK = await import(LIVEAVATAR_SDK_URL);
+  return liveAvatarSDK;
+}
 
 /* ── helpers ──────────────────────────────────────────── */
 function ridKey() { return `bc_rid_${cfg.siteKey}`; }
@@ -445,8 +451,8 @@ async function sendMessage(messagesContainer, text) {
     reply = reply.replace(/【[^】]*】/g, '');
     if (shouldShowContact(text)) suggestions.push('__CONTACT__');
 
-    if (heygenEnabled && heygenSessionId) {
-      heygenPost('speak', { session_id: heygenSessionId, text: reply }).catch(console.error);
+    if (heygenEnabled && heygenSession) {
+      try { heygenSession.repeat(reply); } catch (e) { console.error('[avatar] speak failed', e); }
     } else {
       addMessage(messagesContainer, reply, 'assistant', citations, suggestions, upsells, history.length);
     }
@@ -471,33 +477,36 @@ async function heygenPost(action, body) {
 async function startAvatar(videoEl, toggleBtn) {
   try {
     toggleBtn.disabled = true;
-    const { session_id, sdp, ice_servers } = await heygenPost('start_session', { avatar_id: heygenAvatarId });
-    if (!session_id) throw new Error('No session');
 
-    const pc = new RTCPeerConnection({ iceServers: ice_servers });
-    heygenPeerConn = pc;
-    heygenSessionId = session_id;
+    const { LiveAvatarSession, SessionEvent } = await loadLiveAvatarSDK();
 
-    pc.ontrack = (e) => {
-      if (e.streams?.[0]) videoEl.srcObject = e.streams[0];
-    };
+    // Edge function mints a short-lived LiveAvatar session token (keeps the
+    // API key server-side); the SDK drives start/stop + LiveKit directly.
+    const { session_token, error } = await heygenPost('start_session', { avatar_id: heygenAvatarId });
+    if (!session_token) throw new Error(error || 'No session token');
 
-    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    await heygenPost('connect_session', { session_id, sdp: answer });
-
-    heygenEnabled = true;
+    const session = new LiveAvatarSession(session_token);
+    heygenSession = session;
 
     const primeName = cfg.chatTitle || `${cfg.brandName ? cfg.brandName + ' ' : ''}Brand Concierge`;
     const primeText = `Hi! I'm ${primeName}. You can type a question below to get started.`;
-    pc.oniceconnectionstatechange = () => {
-      if ((pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') && heygenSessionId === session_id) {
-        pc.oniceconnectionstatechange = null;
-        heygenPost('speak', { session_id, text: primeText }).catch(console.error);
-      }
-    };
+
+    // Once both audio + video tracks are live, attach them and prime the avatar.
+    session.on(SessionEvent.SESSION_STREAM_READY, () => {
+      if (heygenSession !== session) return;
+      session.attach(videoEl);
+      videoEl.play?.().catch(() => {});
+      try { session.repeat(primeText); } catch (e) { console.error('[avatar] prime failed', e); }
+    });
+
+    // If the server or network drops the session, fall back to text.
+    session.on(SessionEvent.SESSION_DISCONNECTED, () => {
+      if (heygenSession === session) resetAvatarUI(videoEl, toggleBtn);
+    });
+
+    await session.start();
+    heygenEnabled = true;
+
     toggleBtn.disabled = false;
     toggleBtn.setAttribute('aria-pressed', 'true');
     toggleBtn.title = 'Switch to text';
@@ -505,19 +514,15 @@ async function startAvatar(videoEl, toggleBtn) {
     videoEl.closest('.bc-messages-wrap').querySelector('.bc-messages').classList.add('bc-avatar-hidden');
   } catch (e) {
     console.error('[avatar] start failed', e);
-    toggleBtn.disabled = false;
+    if (heygenSession) { try { await heygenSession.stop(); } catch (_) {} }
+    heygenSession = null;
     heygenEnabled = false;
-    heygenSessionId = null;
-    heygenPeerConn = null;
+    toggleBtn.disabled = false;
   }
 }
 
-async function stopAvatar(videoEl, toggleBtn) {
-  if (heygenSessionId) {
-    heygenPost('stop_session', { session_id: heygenSessionId }).catch(() => {});
-  }
-  if (heygenPeerConn) { heygenPeerConn.close(); heygenPeerConn = null; }
-  heygenSessionId = null;
+function resetAvatarUI(videoEl, toggleBtn) {
+  heygenSession = null;
   heygenEnabled = false;
   videoEl.srcObject = null;
   videoEl.classList.add('bc-avatar-hidden');
@@ -527,13 +532,21 @@ async function stopAvatar(videoEl, toggleBtn) {
   toggleBtn.disabled = false;
 }
 
+async function stopAvatar(videoEl, toggleBtn) {
+  const session = heygenSession;
+  heygenSession = null;
+  heygenEnabled = false;
+  if (session) { try { await session.stop(); } catch (_) {} }
+  resetAvatarUI(videoEl, toggleBtn);
+}
+
 /* ── chat modal ───────────────────────────────────────── */
 function closeModal() {
-  if (heygenSessionId) {
-    heygenPost('stop_session', { session_id: heygenSessionId }).catch(() => {});
-    if (heygenPeerConn) { heygenPeerConn.close(); heygenPeerConn = null; }
-    heygenSessionId = null;
+  if (heygenSession) {
+    const session = heygenSession;
+    heygenSession = null;
     heygenEnabled = false;
+    session.stop().catch(() => {});
   }
   if (modal) { modal.remove(); modal = null; document.body.style.overflow = ''; }
 }

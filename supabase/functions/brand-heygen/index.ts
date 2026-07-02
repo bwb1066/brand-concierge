@@ -44,7 +44,10 @@ Deno.serve(async (req) => {
   const { action } = body;
 
   try {
-    // Create session: token → start → return LiveKit credentials for frontend
+    // Mint a short-lived LiveAvatar session token for the browser. The API key
+    // stays server-side; the @heygen/liveavatar-web-sdk client then drives
+    // session start/stop, LiveKit transport, and speak commands directly using
+    // this token (Bearer auth against api.liveavatar.com).
     if (action === "start_session") {
       const { avatar_id, quality = "high" } = body;
       if (!avatar_id) return json({ error: "avatar_id required" }, 400);
@@ -58,21 +61,7 @@ Deno.serve(async (req) => {
       const sessionToken = tokenRes.data?.session_token;
       if (!sessionToken) throw new Error("No session_token from LiveAvatar");
 
-      const startRes = await liveAvatarPost("/v1/sessions/start", {}, sessionToken);
-
-      return json({
-        session_id: startRes.data?.session_id ?? tokenRes.data?.session_id,
-        livekit_url: startRes.data?.livekit_url,
-        livekit_client_token: startRes.data?.livekit_client_token,
-      });
-    }
-
-    // Stop the session
-    if (action === "stop_session") {
-      const { session_id } = body;
-      if (!session_id) return json({ error: "session_id required" }, 400);
-      await liveAvatarPost("/v1/sessions/stop", { session_id, reason: "USER_CLOSED" });
-      return json({ ok: true });
+      return json({ session_token: sessionToken });
     }
 
     return json({ error: "Unknown action" }, 400);
