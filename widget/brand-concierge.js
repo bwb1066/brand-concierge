@@ -490,15 +490,14 @@ async function startAvatar(videoEl, toggleBtn) {
 
     heygenEnabled = true;
 
-    const _primeName = cfg.chatTitle || `${cfg.brandName ? cfg.brandName + ' ' : ''}Brand Concierge`;
-    setTimeout(() => {
-      if (heygenSessionId === session_id) {
-        heygenPost('speak', {
-          session_id,
-          text: `Hi! I'm ${_primeName}. You can type a question below to get started.`,
-        }).catch(console.error);
+    const primeName = cfg.chatTitle || `${cfg.brandName ? cfg.brandName + ' ' : ''}Brand Concierge`;
+    const primeText = `Hi! I'm ${primeName}. You can type a question below to get started.`;
+    pc.oniceconnectionstatechange = () => {
+      if ((pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') && heygenSessionId === session_id) {
+        pc.oniceconnectionstatechange = null;
+        heygenPost('speak', { session_id, text: primeText }).catch(console.error);
       }
-    }, 1500);
+    };
     toggleBtn.disabled = false;
     toggleBtn.setAttribute('aria-pressed', 'true');
     toggleBtn.title = 'Switch to text';
