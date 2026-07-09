@@ -128,12 +128,26 @@ function cleanUrl(u: string): string {
   try {
     const parsed = new URL(u);
     [...parsed.searchParams.keys()]
-      .filter((k) => k.startsWith("utm_") || k === "msockid")
+      .filter((k) => k.startsWith("utm_") || k === "msockid" || k === "PrintPDF")
       .forEach((k) => parsed.searchParams.delete(k));
     return parsed.toString();
   } catch {
     return u;
   }
+}
+
+// Extract a usable URL from a model-authored field. The model sometimes appends
+// its markdown citation syntax directly onto the URL, e.g.
+//   https://…/2282/%20([edmundoptics.com](https://…/2282/?utm_source=openai))
+// which otherwise gets stored as the card's href (broken link) and fails to match
+// the catalog URL (no image). Grab the first http(s) token and cut it at the first
+// whitespace, encoded space, or opening paren, then run cleanUrl.
+function sanitizeUrl(raw: string): string {
+  if (!raw) return raw;
+  const match = raw.match(/https?:\/\/\S+/);
+  let url = (match ? match[0] : raw.trim()).split(/[\s(]|%20/)[0];
+  url = url.replace(/[.,)"'\]>]+$/, "");
+  return cleanUrl(url);
 }
 
 
@@ -575,14 +589,14 @@ Deno.serve(async (req) => {
       // Parse RECOMMENDATION lines wherever they appear in the response
       const parts = trimmed.replace(/^RECOMMENDATION:\s*/, "").split("|").map((p) => p.trim());
       if (parts.length >= 4) {
-        const realUrl = productNameUrlMap.get(parts[0].toLowerCase()) || parts[3];
+        const realUrl = productNameUrlMap.get(parts[0].toLowerCase()) || sanitizeUrl(parts[3]);
         recommendations.push({ title: parts[0], reason: parts[1], price: parts[2], url: realUrl, image: productImageMap.get(realUrl) || "" });
       }
     } else if (trimmed.startsWith("RESOURCE:")) {
       // Parse RESOURCE lines wherever they appear in the response
       const parts = trimmed.replace(/^RESOURCE:\s*/, "").split("|").map((p) => p.trim());
       if (parts.length >= 3) {
-        resourceRaws.push({ title: parts[0], teaser: parts[1], url: cleanUrl(parts[2]) });
+        resourceRaws.push({ title: parts[0], teaser: parts[1], url: sanitizeUrl(parts[2]) });
       }
     } else if (trailingIndices.includes(i)) {
       const q = trimmed
