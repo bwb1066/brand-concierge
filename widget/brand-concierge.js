@@ -24,6 +24,8 @@ let cfg = {
   brandName: '',
   contactUrl: '',
   title: 'Ask the Brand Concierge',
+  contactLabel: '',
+  theme: {},
   disclaimer: 'AI responses may be inaccurate and any offers provided are non-binding.',
   disclaimerLink: '',
   disclaimerLinkText: '',
@@ -155,10 +157,41 @@ async function loadConfig() {
     cfg.initialPrompt = c.initial_prompt || 'Ask me a question...';
     cfg.chatTitle = c.chat_title || '';
     cfg.title = cfg.chatTitle || `Ask the ${cfg.brandName} Brand Concierge`;
+    cfg.contactLabel = c.contact_label || '';
+    cfg.theme = c.theme && typeof c.theme === 'object' ? c.theme : {};
     heygenAvatarId = c.heygen_avatar_id || null;
     configLoaded = true;
     return true;
   } catch { return false; }
+}
+
+/* Map of theme config keys → CSS custom properties. */
+const THEME_VARS = {
+  font: '--bc-font',
+  primary: '--bc-primary',
+  primaryHover: '--bc-primary-hover',
+  onPrimary: '--bc-on-primary',
+  link: '--bc-link',
+  userBg: '--bc-user-bg',
+  userInk: '--bc-user-ink',
+  dialogRadius: '--bc-dialog-radius',
+};
+
+/**
+ * Apply the per-brand theme to a root element by setting only the CSS
+ * variables for keys that are actually present in cfg.theme. Absent keys fall
+ * back to the CSS defaults, so an empty/partial theme leaves rendering intact.
+ * @param {Element} el root element (e.g. the .bc-overlay or trigger button)
+ */
+function applyTheme(el) {
+  const theme = cfg.theme;
+  if (!el || !theme || typeof theme !== 'object') return;
+  Object.keys(THEME_VARS).forEach((key) => {
+    const value = theme[key];
+    if (value != null && value !== '') {
+      el.style.setProperty(THEME_VARS[key], value);
+    }
+  });
 }
 
 /* ── messages ─────────────────────────────────────────── */
@@ -259,7 +292,7 @@ function addMessage(container, text, role, citations, suggestions, recommendatio
           link.target = '_blank';
           link.rel = 'noopener';
           link.className = 'bc-suggestion bc-contact';
-          link.textContent = `Have a ${cfg.brandName || 'brand'} representative reach out`;
+          link.textContent = cfg.contactLabel || `Have a ${cfg.brandName || 'brand'} representative reach out`;
           wrap.append(link);
         } else if (q !== '__CONTACT__') {
           const btn = document.createElement('button');
@@ -566,6 +599,7 @@ function closeModal() {
 function buildModal(initialQuery) {
   const overlay = document.createElement('div');
   overlay.className = 'bc-overlay';
+  applyTheme(overlay);
 
   const dialog = document.createElement('div');
   dialog.className = 'bc-dialog';
@@ -669,6 +703,10 @@ function buildModal(initialQuery) {
   overlay.append(dialog);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
 
+  // Avatar is hidden by default. The toggle button only exists when an avatar
+  // is configured for the brand (heygenAvatarId set), and clicking it is what
+  // reveals/starts the avatar. If no avatar is configured, there is no toggle,
+  // so tapping does nothing.
   if (avatarToggleBtn) {
     avatarToggleBtn.addEventListener('click', () => {
       if (heygenEnabled) {
@@ -677,7 +715,6 @@ function buildModal(initialQuery) {
         startAvatar(videoEl, avatarToggleBtn);
       }
     });
-    startAvatar(videoEl, avatarToggleBtn);
   }
 
   document.body.append(overlay);
@@ -685,7 +722,11 @@ function buildModal(initialQuery) {
   modal = overlay;
 
   history.forEach((m, idx) => addMessage(messages, m.content, m.role, m.citations, m.suggestions, m.recommendations, m.bookingUrl, idx, m.resources));
-  if (initialQuery) sendMessage(messages, initialQuery);
+  // Prefill/auto-submit: if a non-empty query was passed to open()/buildModal(),
+  // send it immediately — same as a user typing it and pressing Enter.
+  if (typeof initialQuery === 'string' && initialQuery.trim()) {
+    sendMessage(messages, initialQuery.trim());
+  }
 }
 
 /* ── auto-save config to Supabase ─────────────────────── */
@@ -736,6 +777,7 @@ function buildTrigger() {
   btn.id = 'bc-trigger';
   btn.type = 'button';
   btn.setAttribute('aria-label', cfg.triggerLabel || `Chat with ${cfg.brandName || 'us'}`);
+  applyTheme(btn);
 
   if (cfg.triggerStyle === 'tab') {
     btn.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:6px">${ADOBE_A}${cfg.triggerLabel ? `<span style="font-size:11px;font-weight:600;letter-spacing:0.03em;color:#111">${cfg.triggerLabel}</span>` : ''}</div>`;
