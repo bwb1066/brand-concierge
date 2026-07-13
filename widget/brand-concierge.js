@@ -668,12 +668,25 @@ function buildModal(initialQuery) {
   input.className = 'bc-input';
   input.placeholder = cfg.initialPrompt || 'Ask me a question...';
   input.rows = 1;
-  input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${input.scrollHeight}px`; });
+  // Harden the composer against host-page textarea CSS (e.g. a global
+  // min-height/height rule) that would otherwise inflate it when the widget is
+  // embedded on a brand's own site. Inline !important outranks host rules
+  // (even host !important); auto-grow is capped at MAX_INPUT_H.
+  const MAX_INPUT_H = 120;
+  input.style.setProperty('min-height', '0', 'important');
+  input.style.setProperty('max-height', `${MAX_INPUT_H}px`, 'important');
+  input.style.setProperty('box-sizing', 'border-box', 'important');
+  const autosize = () => {
+    input.style.setProperty('height', 'auto', 'important');
+    input.style.setProperty('height', `${Math.min(input.scrollHeight, MAX_INPUT_H)}px`, 'important');
+  };
+  input.addEventListener('input', autosize);
+  requestAnimationFrame(autosize);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       const t = input.value.trim();
-      if (t) { input.value = ''; input.style.height = 'auto'; sendMessage(messages, t); }
+      if (t) { input.value = ''; autosize(); sendMessage(messages, t); }
     }
   });
   const sendBtn = document.createElement('button');
@@ -682,7 +695,7 @@ function buildModal(initialQuery) {
   sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>';
   sendBtn.addEventListener('click', () => {
     const t = input.value.trim();
-    if (t) { input.value = ''; input.style.height = 'auto'; sendMessage(messages, t); }
+    if (t) { input.value = ''; autosize(); sendMessage(messages, t); }
   });
   inputWrap.append(input);
   inputWrap.append(sendBtn);
