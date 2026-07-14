@@ -278,7 +278,8 @@ async function transcribe(blob) {
       headers: { apikey: cfg.anonKey, Authorization: `Bearer ${cfg.anonKey}` },
       body: fd,
     });
-    const data = await resp.json();
+    const data = await resp.json().catch(() => ({}));
+    console.log('[brand-concierge] transcribe status', resp.status, data);
     return (data.text || '').trim();
   } catch (err) {
     console.error('[brand-concierge] transcribe error:', err);
@@ -290,7 +291,9 @@ function stopRecording() {
   if (recorder && isRecording) { try { recorder.stop(); } catch { /* ignore */ } }
 }
 
-/* Tap-to-toggle mic capture. On stop, transcribe and auto-send the result. */
+/* Mic capture. Tap once and talk: recording auto-stops ~1.5s after you finish
+   speaking (silence detection), or after a hard cap, or on a second tap. On
+   stop it transcribes and sends the result (which appears as a user message). */
 async function startRecording(input, messages, micBtn) {
   try {
     stopSpeaking();
@@ -300,21 +303,73 @@ async function startRecording(input, messages, micBtn) {
       .find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
     recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
     const chunks = [];
+
+    // Voice-activity auto-stop so users don't have to know to tap again. Watch
+    // the mic's RMS level; once speech is detected, stop after a short silence.
+    let audioCtx = null;
+    let rafId = null;
+    let spoke = false;
+    const startTime = performance.now();
+    let lastLoud = startTime;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new Ctx();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      const SILENCE_MS = 1500;
+      const MAX_MS = 20000;
+      const THRESHOLD = 0.02;
+      const monitor = () => {
+        if (!isRecording) return;
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i += 1) { const v = (buf[i] - 128) / 128; sum += v * v; }
+        const rms = Math.sqrt(sum / buf.length);
+        const now = performance.now();
+        if (rms > THRESHOLD) { spoke = true; lastLoud = now; }
+        if ((spoke && now - lastLoud > SILENCE_MS) || now - startTime > MAX_MS) {
+          stopRecording();
+          return;
+        }
+        rafId = requestAnimationFrame(monitor);
+      };
+      rafId = requestAnimationFrame(monitor);
+    } catch { /* AudioContext unsupported — fall back to manual tap-to-stop */ }
+
     recorder.addEventListener('dataavailable', (e) => { if (e.data.size) chunks.push(e.data); });
     recorder.addEventListener('stop', async () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      if (audioCtx) { try { audioCtx.close(); } catch { /* ignore */ } }
       recStream.getTracks().forEach((tr) => tr.stop());
       recStream = null;
       isRecording = false;
       micBtn.classList.remove('recording');
       micBtn.setAttribute('aria-label', 'Speak');
       const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
-      if (blob.size < 800) return; // too short / silence
+      console.log('[brand-concierge] recording stopped:', blob.size, 'bytes', blob.type);
+      if (blob.size < 800) { // too short / no speech captured
+        input.placeholder = "Didn't catch that — tap the mic and speak again";
+        return;
+      }
       micBtn.classList.add('busy');
       const text = await transcribe(blob);
       micBtn.classList.remove('busy');
-      if (text) { input.value = ''; sendMessage(messages, text); }
+      if (text) {
+        // Show the recognized words in the composer, then send.
+        input.value = text;
+        input.dispatchEvent(new Event('input')); // trigger autosize
+        sendMessage(messages, text);
+        input.value = '';
+        input.dispatchEvent(new Event('input'));
+      } else {
+        input.placeholder = "Didn't catch that — tap the mic and speak again";
+        console.warn('[brand-concierge] transcription returned no text');
+      }
     });
-    recorder.start();
+    recorder.start(250); // flush chunks periodically so we never lose audio
     isRecording = true;
     micBtn.classList.add('recording');
     micBtn.setAttribute('aria-label', 'Stop recording');
