@@ -83,6 +83,8 @@ Deno.serve(async (req) => {
       heygen_avatar_id:           body.heygen_avatar_id || null,
       theme:                      body.theme || null,
       contact_label:              body.contact_label || null,
+      voice_enabled:              body.voice_enabled ?? false,
+      voice:                      body.voice || null,
     };
 
     const { data, error } = await sb

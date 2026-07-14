@@ -37,6 +37,8 @@ let cfg = {
   triggerLabel: '',
   widgetBase: '',
   noCssAutoLoad: false,
+  voiceEnabled: false,
+  voice: '',
 };
 
 const CONTACT_PHRASES = [
@@ -53,6 +55,13 @@ let questionCount = 0;
 let lastResponseId = null;
 const history = [];
 let ratings = {};
+
+// Voice state
+let voiceMode = false;      // session opt-in (default off), persisted per site
+let currentAudio = null;    // in-flight TTS playback
+let recorder = null;        // active MediaRecorder
+let recStream = null;       // active mic MediaStream
+let isRecording = false;
 
 // Avatar state
 let triggerObserver = null;
@@ -159,6 +168,9 @@ async function loadConfig() {
     cfg.title = cfg.chatTitle || `Ask the ${cfg.brandName} Brand Concierge`;
     cfg.contactLabel = c.contact_label || '';
     cfg.theme = c.theme && typeof c.theme === 'object' ? c.theme : {};
+    cfg.voiceEnabled = c.voice_enabled === true;
+    cfg.voice = c.voice || '';
+    if (cfg.voiceEnabled) loadVoiceMode(); else voiceMode = false;
     heygenAvatarId = c.heygen_avatar_id || null;
     configLoaded = true;
     return true;
@@ -194,8 +206,127 @@ function applyTheme(el) {
   });
 }
 
+/* ── voice (STT in / TTS out) ─────────────────────────── */
+function voiceKey() { return `bc_voice_${cfg.siteKey}`; }
+function loadVoiceMode() { try { voiceMode = localStorage.getItem(voiceKey()) === '1'; } catch { voiceMode = false; } }
+function saveVoiceMode(v) { try { localStorage.setItem(voiceKey(), v ? '1' : '0'); } catch { /* ignore */ } }
+
+/* Strip a markdown answer down to plain prose suitable for TTS. Used as a
+   fallback when the backend didn't supply a spoken_summary (older deploy or
+   voice mode off at request time). Drops code, images, links/URLs, and lists. */
+function toSpeakable(md) {
+  return (md || '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/^\s*[-*•]\s+/gm, '')
+    .replace(/[#*_>`|]/g, '')
+    .replace(/\n{2,}/g, '. ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 700);
+}
+
+function stopSpeaking() {
+  if (currentAudio) {
+    try { currentAudio.pause(); currentAudio.src = ''; } catch { /* ignore */ }
+    currentAudio = null;
+  }
+  document.querySelectorAll('.bc-replay.speaking').forEach((b) => b.classList.remove('speaking'));
+}
+
+/* Fetch and play TTS audio for `text`. `btn` (optional) is a replay button that
+   reflects playing state. Any prior playback is stopped first. */
+async function speak(text, btn) {
+  const t = (text || '').trim();
+  if (!t || !cfg.supabaseUrl) return;
+  stopSpeaking();
+  try {
+    const resp = await fetch(`${cfg.supabaseUrl}/functions/v1/brand-speak`, {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({ text: t, voice: cfg.voice || undefined }),
+    });
+    if (!resp.ok) return;
+    const buf = await resp.arrayBuffer();
+    const url = URL.createObjectURL(new Blob([buf], { type: 'audio/mpeg' }));
+    const audio = new Audio(url);
+    currentAudio = audio;
+    if (btn) btn.classList.add('speaking');
+    const cleanup = () => {
+      URL.revokeObjectURL(url);
+      if (btn) btn.classList.remove('speaking');
+      if (currentAudio === audio) currentAudio = null;
+    };
+    audio.addEventListener('ended', cleanup);
+    audio.addEventListener('error', cleanup);
+    await audio.play().catch(() => {});
+  } catch (err) {
+    console.error('[brand-concierge] speak error:', err);
+  }
+}
+
+/* POST recorded audio to the transcribe function, return the recognized text. */
+async function transcribe(blob) {
+  try {
+    const fd = new FormData();
+    fd.append('file', blob, 'audio.webm');
+    const resp = await fetch(`${cfg.supabaseUrl}/functions/v1/brand-transcribe`, {
+      method: 'POST',
+      // No Content-Type — the browser sets the multipart boundary.
+      headers: { apikey: cfg.anonKey, Authorization: `Bearer ${cfg.anonKey}` },
+      body: fd,
+    });
+    const data = await resp.json();
+    return (data.text || '').trim();
+  } catch (err) {
+    console.error('[brand-concierge] transcribe error:', err);
+    return '';
+  }
+}
+
+function stopRecording() {
+  if (recorder && isRecording) { try { recorder.stop(); } catch { /* ignore */ } }
+}
+
+/* Tap-to-toggle mic capture. On stop, transcribe and auto-send the result. */
+async function startRecording(input, messages, micBtn) {
+  try {
+    stopSpeaking();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recStream = stream;
+    const mime = ['audio/webm', 'audio/mp4', 'audio/ogg']
+      .find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+    recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    const chunks = [];
+    recorder.addEventListener('dataavailable', (e) => { if (e.data.size) chunks.push(e.data); });
+    recorder.addEventListener('stop', async () => {
+      recStream.getTracks().forEach((tr) => tr.stop());
+      recStream = null;
+      isRecording = false;
+      micBtn.classList.remove('recording');
+      micBtn.setAttribute('aria-label', 'Speak');
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+      if (blob.size < 800) return; // too short / silence
+      micBtn.classList.add('busy');
+      const text = await transcribe(blob);
+      micBtn.classList.remove('busy');
+      if (text) { input.value = ''; sendMessage(messages, text); }
+    });
+    recorder.start();
+    isRecording = true;
+    micBtn.classList.add('recording');
+    micBtn.setAttribute('aria-label', 'Stop recording');
+  } catch (err) {
+    console.error('[brand-concierge] mic error:', err);
+    isRecording = false;
+    micBtn.classList.remove('recording');
+  }
+}
+
 /* ── messages ─────────────────────────────────────────── */
-function addMessage(container, text, role, citations, suggestions, recommendations, bookingUrl, messageIdx, resources) {
+function addMessage(container, text, role, citations, suggestions, recommendations, bookingUrl, messageIdx, resources, spoken) {
   container.closest('.bc-dialog')?.classList.add('has-messages');
   const msg = document.createElement('div');
   msg.className = `bc-message bc-${role}`;
@@ -330,6 +461,20 @@ function addMessage(container, text, role, citations, suggestions, recommendatio
       thumbUp.addEventListener('click', () => { saveRating(messageIdx, ratings[messageIdx] === 'up' ? null : 'up'); sync(); });
       thumbDown.addEventListener('click', () => { saveRating(messageIdx, ratings[messageIdx] === 'down' ? null : 'down'); sync(); });
       feedback.append(thumbUp, thumbDown);
+
+      // Replay button — read this answer aloud (only when the brand enables voice)
+      if (cfg.voiceEnabled) {
+        const replay = document.createElement('button');
+        replay.type = 'button';
+        replay.className = 'bc-replay';
+        replay.setAttribute('aria-label', 'Read aloud');
+        replay.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
+        replay.addEventListener('click', () => {
+          if (replay.classList.contains('speaking')) { stopSpeaking(); return; }
+          speak(spoken || toSpeakable(text), replay);
+        });
+        feedback.append(replay);
+      }
       msg.append(feedback);
     }
   } else {
@@ -363,7 +508,12 @@ async function sendMessage(messagesContainer, text) {
 
   try {
     const url = `${cfg.supabaseUrl}/functions/v1/brand-chat`;
-    const payload = { message: text, site_key: cfg.siteKey, previous_response_id: lastResponseId || undefined };
+    const payload = {
+      message: text,
+      site_key: cfg.siteKey,
+      previous_response_id: lastResponseId || undefined,
+      voice: voiceMode || undefined,
+    };
     console.log('[brand-concierge] POST', url, payload);
 
     const resp = await fetch(url, {
@@ -401,14 +551,18 @@ async function sendMessage(messagesContainer, text) {
     if (!reply) reply = "I wasn't able to find an answer. Please try rephrasing your question.";
 
     reply = reply.replace(/【[^】]*】/g, '');
+    const spoken = data.spoken_summary || '';
     if (shouldShowContact(text)) suggestions.push('__CONTACT__');
 
     if (heygenEnabled && heygenRoom) {
       heygenSpeak(reply);
     } else {
-      addMessage(messagesContainer, reply, 'assistant', citations, suggestions, recommendations, bookingUrl, history.length, resources);
+      addMessage(messagesContainer, reply, 'assistant', citations, suggestions, recommendations, bookingUrl, history.length, resources, spoken);
+      // Voice mode: read the answer aloud (spoken summary from the backend,
+      // else a client-side prose fallback). Cards still render on screen.
+      if (voiceMode) speak(spoken || toSpeakable(reply));
     }
-    history.push({ role: 'assistant', content: reply, citations, suggestions, recommendations, bookingUrl, resources });
+    history.push({ role: 'assistant', content: reply, citations, suggestions, recommendations, bookingUrl, resources, spoken });
   } catch (err) {
     console.error('[brand-concierge] fetch error:', err);
     thinking.remove();
@@ -587,6 +741,8 @@ async function stopAvatar(videoEl, toggleBtn) {
 
 /* ── chat modal ───────────────────────────────────────── */
 function closeModal() {
+  stopSpeaking();
+  stopRecording();
   if (heygenSessionId) {
     stopHeygenSession(heygenSessionId);
     if (heygenRoom) { heygenRoom.disconnect(); heygenRoom = null; }
@@ -603,6 +759,7 @@ function buildModal(initialQuery) {
 
   const dialog = document.createElement('div');
   dialog.className = 'bc-dialog';
+  if (cfg.voiceEnabled && voiceMode) dialog.classList.add('voice-on');
 
   // Header
   const header = document.createElement('div');
@@ -626,6 +783,19 @@ function buildModal(initialQuery) {
     avatarToggleBtn.title = 'Switch to avatar';
     avatarToggleBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>';
     header.append(avatarToggleBtn);
+  }
+
+  // Voice-mode toggle (only when the brand enables voice). One tap turns the
+  // whole voice experience on/off: mic input + spoken replies. Default off.
+  let voiceToggleBtn = null;
+  if (cfg.voiceEnabled) {
+    voiceToggleBtn = document.createElement('button');
+    voiceToggleBtn.type = 'button';
+    voiceToggleBtn.className = 'bc-voice-toggle';
+    voiceToggleBtn.setAttribute('aria-pressed', voiceMode ? 'true' : 'false');
+    voiceToggleBtn.title = voiceMode ? 'Turn voice off' : 'Turn voice on';
+    voiceToggleBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
+    header.append(voiceToggleBtn);
   }
 
   header.append(closeBtn);
@@ -689,6 +859,21 @@ function buildModal(initialQuery) {
       if (t) { input.value = ''; autosize(); sendMessage(messages, t); }
     }
   });
+  // Mic button (only when the brand enables voice). Hidden via CSS unless voice
+  // mode is on. Tap to start recording, tap again to stop → transcribe → send.
+  let micBtn = null;
+  if (cfg.voiceEnabled) {
+    micBtn = document.createElement('button');
+    micBtn.type = 'button';
+    micBtn.className = 'bc-mic';
+    micBtn.setAttribute('aria-label', 'Speak');
+    micBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
+    micBtn.addEventListener('click', () => {
+      if (isRecording) stopRecording();
+      else startRecording(input, messages, micBtn);
+    });
+  }
+
   const sendBtn = document.createElement('button');
   sendBtn.className = 'bc-send';
   sendBtn.type = 'button';
@@ -698,6 +883,7 @@ function buildModal(initialQuery) {
     if (t) { input.value = ''; autosize(); sendMessage(messages, t); }
   });
   inputWrap.append(input);
+  if (micBtn) inputWrap.append(micBtn);
   inputWrap.append(sendBtn);
   inputArea.append(inputWrap);
 
@@ -730,11 +916,22 @@ function buildModal(initialQuery) {
     });
   }
 
+  if (voiceToggleBtn) {
+    voiceToggleBtn.addEventListener('click', () => {
+      voiceMode = !voiceMode;
+      saveVoiceMode(voiceMode);
+      dialog.classList.toggle('voice-on', voiceMode);
+      voiceToggleBtn.setAttribute('aria-pressed', voiceMode ? 'true' : 'false');
+      voiceToggleBtn.title = voiceMode ? 'Turn voice off' : 'Turn voice on';
+      if (!voiceMode) { stopSpeaking(); stopRecording(); }
+    });
+  }
+
   document.body.append(overlay);
   document.body.style.overflow = 'hidden';
   modal = overlay;
 
-  history.forEach((m, idx) => addMessage(messages, m.content, m.role, m.citations, m.suggestions, m.recommendations, m.bookingUrl, idx, m.resources));
+  history.forEach((m, idx) => addMessage(messages, m.content, m.role, m.citations, m.suggestions, m.recommendations, m.bookingUrl, idx, m.resources, m.spoken));
   // Prefill/auto-submit: if a non-empty query was passed to open()/buildModal(),
   // send it immediately — same as a user typing it and pressing Enter.
   if (typeof initialQuery === 'string' && initialQuery.trim()) {

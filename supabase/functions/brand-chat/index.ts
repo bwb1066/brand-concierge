@@ -279,6 +279,45 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
   return parts.filter(Boolean).join("\n\n");
 }
 
+// Condense a written answer into a short, natural spoken summary for TTS.
+// Only invoked when the client requests voice mode, so text-only requests are
+// unaffected. Returns "" on any failure — the widget then falls back to its own
+// client-side sanitizer.
+async function summarizeForSpeech(answer: string): Promise<string> {
+  const clipped = answer.slice(0, 4000);
+  try {
+    const res = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4.1-mini",
+        instructions:
+          "Convert the assistant's written answer into a short spoken summary for text-to-speech. " +
+          "1-2 conversational sentences. No markdown, no URLs, no bullet lists, no citations. " +
+          "If the answer references products, articles, or resources shown on screen, briefly " +
+          "acknowledge them (e.g. 'a few options are shown below') instead of listing details. " +
+          "Do not read out follow-up suggestions.",
+        input: clipped,
+        max_output_tokens: 200,
+      }),
+    });
+    const data = await res.json();
+    const msg = data.output?.find((o: { type: string }) => o.type === "message");
+    let out = "";
+    if (msg?.content) {
+      for (const c of msg.content) {
+        if (c.type === "output_text") out += c.text;
+      }
+    }
+    return out.trim();
+  } catch {
+    return "";
+  }
+}
+
 function webSearchInstructions(context: string): string {
   return (
     `You are finding brief supplementary content in the context of "${context}". ` +
@@ -662,6 +701,14 @@ Deno.serve(async (req) => {
     .filter((r): r is Resource => r !== null)
     .slice(0, 3);
 
+  // Spoken summary (voice mode only). Generated from the final cleaned prose,
+  // which already has cards/suggestions stripped, so it never reads out URLs.
+  let spokenSummary: string | undefined;
+  if (body.voice === true && text) {
+    const summary = await summarizeForSpeech(text);
+    if (summary) spokenSummary = summary;
+  }
+
   return new Response(
     JSON.stringify({
       text,
@@ -669,6 +716,7 @@ Deno.serve(async (req) => {
       suggestions,
       recommendations,
       resources,
+      spoken_summary: spokenSummary,
       contactUrl: config.contact_url,
       initialPrompt: config.initial_prompt || undefined,
       chatTitle: config.chat_title || undefined,

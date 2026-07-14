@@ -104,6 +104,21 @@
 .bc-avatar-toggle:hover { color: #242727; background: #f1f3f5; }
 .bc-avatar-toggle[aria-pressed="true"] { color: var(--bc-link, #12417c); }
 
+/* voice-mode toggle — mirrors the avatar toggle */
+.bc-voice-toggle {
+  background: none;
+  border: none;
+  color: #6b7070;
+  cursor: pointer;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  margin-right: 4px;
+  border-radius: 6px;
+}
+.bc-voice-toggle:hover { color: #242727; background: #f1f3f5; }
+.bc-voice-toggle[aria-pressed="true"] { color: var(--bc-link, #12417c); }
+
 .bc-dialog.has-messages .bc-messages-wrap {
   display: block;
 }
@@ -275,6 +290,19 @@
 
 .bc-thumb:hover { color: #6b7070; }
 .bc-thumb[aria-pressed="true"] { color: var(--bc-link, #12417c); }
+
+/* read-aloud replay button (per assistant message, voice brands only) */
+.bc-replay {
+  background: none;
+  border: none;
+  color: #9a9f9f;
+  cursor: pointer;
+  padding: 2px 4px;
+  display: flex;
+  align-items: center;
+}
+.bc-replay:hover { color: #6b7070; }
+.bc-replay.speaking { color: var(--bc-link, #12417c); }
 
 /* book now CTA */
 .bc-book-now {
@@ -490,6 +518,40 @@
 
 .bc-send:hover { color: #242727; }
 
+/* mic — hidden until voice mode is toggled on */
+.bc-mic {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #f1f3f5;
+  color: #6b7070;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.bc-dialog.voice-on .bc-mic { display: flex; }
+.bc-mic:hover { background: #e6e9ea; color: #242727; }
+.bc-mic.recording {
+  background: var(--bc-primary, #12417c);
+  color: var(--bc-on-primary, #fff);
+  animation: bc-mic-pulse 1.3s ease-in-out infinite;
+}
+.bc-mic.busy { opacity: 0.55; pointer-events: none; }
+
+@keyframes bc-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(18 65 124 / 45%); }
+  50% { box-shadow: 0 0 0 7px rgb(18 65 124 / 0%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bc-mic.recording { animation: none; }
+}
+
 .bc-disclaimer {
   font-size: 11px;
   color: #6b7070;
@@ -515,4 +577,8 @@
   .bc-header { padding: 16px 20px 12px; }
   .bc-messages { padding: 16px 20px 32px; }
   .bc-input-area { padding: 12px 20px 16px; }
+
+  /* larger touch targets for voice controls */
+  .bc-mic { width: 44px; height: 44px; }
+  .bc-voice-toggle { padding: 8px 10px; }
 }
