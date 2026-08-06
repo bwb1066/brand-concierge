@@ -44,7 +44,6 @@
 .bc-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 24px 40px 16px;
 }
 
@@ -52,6 +51,10 @@
   font-size: 24px;
   font-weight: 600;
   color: #242727;
+
+  /* absorb the slack so the toggle buttons group together on the right,
+     rather than space-between marooning a lone toggle in the middle */
+  margin-right: auto;
 }
 
 .bc-close {
