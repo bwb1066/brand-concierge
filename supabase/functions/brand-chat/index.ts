@@ -681,6 +681,43 @@ Deno.serve(async (req) => {
     }
   }
 
+  // Intent-gated recommendation fallback.
+  // The model curates RECOMMENDATION cards, but a safety-oriented persona can
+  // route a clear provider request to programs and emit no cards. When (a) the
+  // user is explicitly asking for a person and (b) the model returned none, fill
+  // from the top vector matches above a similarity floor. Both gates are required
+  // — intent without a relevant match, or a relevant match without intent, won't
+  // fire — which keeps off-topic and symptom-only queries from surfacing cards.
+  const PROVIDER_INTENT = new RegExp(
+    "\\b(specialists?|doctors?|physicians?|surgeons?|neurosurgeons?|providers?|clinicians?|practitioners?|orthopa?edists?)\\b"
+    + "|\\bwho\\s+(can\\s+)?(treat|treats|see|sees|specializ\\w*)\\b"
+    + "|\\b(recommend|refer|find|see)\\b[^.?!]{0,30}\\b(doctor|physician|specialist|surgeon|provider|clinician|someone)\\b",
+    "i",
+  );
+  const RECOMMENDATION_SIMILARITY_FLOOR = 0.25;
+  const RECOMMENDATION_FALLBACK_MAX = 10;
+  if (
+    recommendations.length === 0
+    && typeof message === "string"
+    && PROVIDER_INTENT.test(message)
+    && retrievedProducts.length > 0
+  ) {
+    for (const p of retrievedProducts
+      .filter((p) => (p.similarity ?? 0) >= RECOMMENDATION_SIMILARITY_FLOOR)
+      .slice(0, RECOMMENDATION_FALLBACK_MAX)) {
+      const reason = p.product_description.length > 200
+        ? `${p.product_description.slice(0, 200).replace(/\s+\S*$/, "")}…`
+        : p.product_description;
+      recommendations.push({
+        title: p.product_name,
+        reason,
+        price: "",
+        url: p.product_page_url,
+        image: p.product_image_url || "",
+      });
+    }
+  }
+
   // Merge AI-output RESOURCE: lines with auto-detected editorial citation URLs
   // AI-explicit resources take priority; fill remaining slots from auto-detected ones
   interface Resource { title: string; teaser: string; url: string; image: string; }
