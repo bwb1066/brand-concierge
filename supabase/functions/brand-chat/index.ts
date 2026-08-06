@@ -681,34 +681,6 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Deterministic recommendation fallback.
-  // The model curates the RECOMMENDATION cards, but a strong safety-oriented
-  // persona (e.g. a symptom question on a clinical site) sometimes makes it route
-  // to programs and emit no cards at all — even when clearly relevant products
-  // were retrieved. When the model returns zero cards, surface the top vector
-  // matches ourselves, gated by a similarity floor so off-topic queries (parking,
-  // billing, …) whose nearest products are only weakly related still show nothing.
-  // Floor calibrated against live BCH queries: on-topic providers score ~0.28–0.51,
-  // off-topic best matches top out ~0.21, so 0.25 sits cleanly in the gap.
-  const RECOMMENDATION_SIMILARITY_FLOOR = 0.25;
-  const RECOMMENDATION_FALLBACK_MAX = 10;
-  if (recommendations.length === 0 && retrievedProducts.length > 0) {
-    for (const p of retrievedProducts
-      .filter((p) => (p.similarity ?? 0) >= RECOMMENDATION_SIMILARITY_FLOOR)
-      .slice(0, RECOMMENDATION_FALLBACK_MAX)) {
-      const reason = p.product_description.length > 200
-        ? `${p.product_description.slice(0, 200).replace(/\s+\S*$/, "")}…`
-        : p.product_description;
-      recommendations.push({
-        title: p.product_name,
-        reason,
-        price: "",
-        url: p.product_page_url,
-        image: p.product_image_url || "",
-      });
-    }
-  }
-
   // Merge AI-output RESOURCE: lines with auto-detected editorial citation URLs
   // AI-explicit resources take priority; fill remaining slots from auto-detected ones
   interface Resource { title: string; teaser: string; url: string; image: string; }
