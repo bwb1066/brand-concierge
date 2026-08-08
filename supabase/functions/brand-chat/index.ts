@@ -73,10 +73,17 @@ const EXPRESSION_LABELS: Record<string, Record<string, string>> = {
 };
 
 // ── Response length → max_output_tokens ────────────────────────────────────
+// Every request MUST cap output: when max_output_tokens is unset, OpenAI reserves
+// the model's full default output (~16K) against the org's TPM rate limit, so a
+// single chat "Requests" ~20K of a 30K/min budget and the second request in a
+// minute gets rate-limited (empty answer). Capping output slashes that reservation.
 const RESPONSE_TOKEN_LIMITS: Record<string, number> = {
   concise: 400,
+  moderate: 1200,
   detailed: 2000,
 };
+// Fallback cap when response_length is empty/unknown — never leave output unbounded.
+const DEFAULT_MAX_OUTPUT_TOKENS = 1200;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -318,6 +325,16 @@ async function summarizeForSpeech(answer: string): Promise<string> {
   }
 }
 
+// Parse OpenAI's "Please try again in 7.972s" / "256ms" hint into a wait (ms),
+// with a small buffer and a sane clamp so a bad hint can't stall the function.
+function parseRetryDelayMs(message: string): number {
+  const m = /try again in ([\d.]+)\s*(ms|s)\b/i.exec(message || "");
+  if (!m) return 1500;
+  const val = parseFloat(m[1]);
+  const ms = m[2].toLowerCase() === "s" ? val * 1000 : val;
+  return Math.min(Math.max(ms + 300, 500), 15000);
+}
+
 function webSearchInstructions(context: string): string {
   return (
     `You are finding brief supplementary content in the context of "${context}". ` +
@@ -372,7 +389,7 @@ async function callOpenAI(
   tools: Record<string, unknown>[],
   previousResponseId?: string | null,
   maxOutputTokens?: number,
-): Promise<{ text: string; urlMap: Map<string, string>; debug: unknown; responseId: string | null }> {
+): Promise<{ text: string; urlMap: Map<string, string>; debug: unknown; responseId: string | null; rateLimited: boolean }> {
   const requestBody: Record<string, unknown> = {
     model: "gpt-4.1",
     instructions,
@@ -384,18 +401,33 @@ async function callOpenAI(
   if (previousResponseId) requestBody.previous_response_id = previousResponseId;
   if (maxOutputTokens) requestBody.max_output_tokens = maxOutputTokens;
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
+  // Retry transient TPM rate limits: OpenAI tells us how long to wait, so back
+  // off that long and retry once before giving up. Without this a burst of two
+  // requests in one minute returns an empty answer to the user.
+  const MAX_RATE_LIMIT_RETRIES = 2;
+  const postResponses = async () => {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+    return await response.json();
+  };
+  let data = await postResponses();
+  for (let attempt = 0; attempt < MAX_RATE_LIMIT_RETRIES; attempt++) {
+    if (data.error?.code !== "rate_limit_exceeded") break;
+    await new Promise((r) => setTimeout(r, parseRetryDelayMs(data.error.message)));
+    data = await postResponses();
+  }
 
-  const data = await response.json();
   if (data.error) {
-    return { text: "", urlMap: new Map(), debug: data.error, responseId: null };
+    return {
+      text: "", urlMap: new Map(), debug: data.error, responseId: null,
+      rateLimited: data.error.code === "rate_limit_exceeded",
+    };
   }
 
   const messageOutput = data.output?.find((o: { type: string }) => o.type === "message");
@@ -417,7 +449,7 @@ async function callOpenAI(
     }
   }
 
-  return { text, urlMap, debug: data.output ? null : data, responseId: data.id ?? null };
+  return { text, urlMap, debug: data.output ? null : data, responseId: data.id ?? null, rateLimited: false };
 }
 
 // ── Main handler ─────────────────────────────────────────────────────────────
@@ -494,7 +526,7 @@ Deno.serve(async (req) => {
   }
 
   const instructions = buildSystemPrompt(config, productCount > 0);
-  const maxOutputTokens = RESPONSE_TOKEN_LIMITS[config.response_length || ""] ?? undefined;
+  const maxOutputTokens = RESPONSE_TOKEN_LIMITS[config.response_length || ""] ?? DEFAULT_MAX_OUTPUT_TOKENS;
 
   // Retrieve relevant products, build image map, inject into query
   let queryInput = message;
@@ -511,8 +543,11 @@ Deno.serve(async (req) => {
       productByUrlMap.set(p.product_page_url, { name: p.product_name, description: p.product_description });
     }
     if (products.length > 0) {
+      // Cap each description so the injected block stays token-lean (the whole
+      // system prompt is already large; unbounded descriptions add up fast).
+      const clip = (s: string) => (s.length > 280 ? `${s.slice(0, 280).replace(/\s+\S*$/, "")}…` : s);
       const productBlock = products
-        .map((p, i) => `${i + 1}. ${p.product_name}: ${p.product_description}\n   URL: ${p.product_page_url}`)
+        .map((p, i) => `${i + 1}. ${p.product_name}: ${clip(p.product_description)}\n   URL: ${p.product_page_url}`)
         .join("\n\n");
       queryInput = `[Relevant catalog products:]\n${productBlock}\n\n[User question:]\n${message}`;
     }
@@ -532,13 +567,15 @@ Deno.serve(async (req) => {
   }
 
   // Brand call (threaded)
-  let { text: brandText, urlMap: brandUrls, debug: brandDebug, responseId } =
+  let { text: brandText, urlMap: brandUrls, debug: brandDebug, responseId, rateLimited: brandRateLimited } =
     await callOpenAI(queryInput, instructions, brandTools, previous_response_id, maxOutputTokens);
 
-  // Retry without stale thread ID if needed
+  // Retry without stale thread ID if needed — but not when the failure was a rate
+  // limit (callOpenAI already backed off and retried; a stale-thread retry here
+  // would just burn another throttled request).
   let threadReset = false;
-  if (!brandText && brandDebug && previous_response_id) {
-    ({ text: brandText, urlMap: brandUrls, debug: brandDebug, responseId } =
+  if (!brandText && brandDebug && !brandRateLimited && previous_response_id) {
+    ({ text: brandText, urlMap: brandUrls, debug: brandDebug, responseId, rateLimited: brandRateLimited } =
       await callOpenAI(queryInput, instructions, brandTools, undefined, maxOutputTokens));
     threadReset = true;
   }
@@ -746,6 +783,13 @@ Deno.serve(async (req) => {
   if (body.voice === true && text) {
     const summary = await summarizeForSpeech(text);
     if (summary) spokenSummary = summary;
+  }
+
+  // If the brand call was rate-limited and produced nothing, tell the user it's a
+  // transient throttle (retryable) rather than letting the widget show the generic
+  // "couldn't find an answer" message, which misleadingly implies no content exists.
+  if (!text && brandRateLimited) {
+    text = "I'm getting a lot of questions right now and briefly hit my limit. Please try that again in a few seconds.";
   }
 
   return new Response(
