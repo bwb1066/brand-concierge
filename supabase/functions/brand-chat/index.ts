@@ -157,6 +157,31 @@ function sanitizeUrl(raw: string): string {
   return cleanUrl(url);
 }
 
+// Resolve a model-emitted RECOMMENDATION product name to its canonical catalog
+// URL. Exact (case-insensitive) match first, then a safe token-subsequence match
+// so "5520 Series Universal Switches" still resolves to the catalog's "5520
+// Series" — while "200 Series" will NOT spuriously match "8200 Series" (matched
+// on whole tokens, not substrings). Resolving to the canonical URL is what lets
+// the image lookup (keyed by product_page_url) attach a thumbnail to the card.
+function resolveCatalogUrl(name: string, nameUrlMap: Map<string, string>): string | undefined {
+  const exact = nameUrlMap.get(name.toLowerCase());
+  if (exact) return exact;
+  const toks = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  const isRun = (needle: string[], hay: string[]): boolean => {
+    if (!needle.length || needle.length > hay.length) return false;
+    for (let i = 0; i + needle.length <= hay.length; i++) {
+      if (needle.every((t, j) => hay[i + j] === t)) return true;
+    }
+    return false;
+  };
+  const nameToks = toks(name);
+  for (const [catName, url] of nameUrlMap) {
+    const catToks = toks(catName);
+    if (isRun(catToks, nameToks) || isRun(nameToks, catToks)) return url;
+  }
+  return undefined;
+}
+
 
 async function getConfig(
   sb: ReturnType<typeof createClient>,
@@ -256,32 +281,43 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
     parts.push("Response length: Provide comprehensive, detailed responses. Cover the topic thoroughly with relevant examples and context.");
   }
 
-  // Product catalog usage (only when the brand has indexed products)
+  // ── Machine-readable output contract ──────────────────────────────────────
+  // This is appended last and is authoritative about how the response ends. It
+  // supersedes any earlier persona wording (e.g. "SUGGESTED lines must be the
+  // very last lines") that would otherwise stop the model before it emits the
+  // product/resource cards the UI renders. Keep the three line types in a fixed
+  // order — RECOMMENDATION → RESOURCE → SUGGESTED — so the parser and the widget
+  // agree, with SUGGESTED genuinely last.
+  const contract: string[] = [];
+  contract.push(
+    "RESPONSE OUTPUT CONTRACT (required — this overrides any earlier instruction about what must appear at the end of your response):\n" +
+    "After your prose answer, append machine-readable lines in exactly this order, each on its own line, " +
+    "with no heading, label, bullet, or blank-line preamble before them: first RECOMMENDATION lines, then RESOURCE lines, then SUGGESTED lines. " +
+    "SUGGESTED lines are always the final lines of the whole response. These lines are parsed programmatically and rendered as cards — a product or article mentioned only in prose will NOT appear.",
+  );
+
   if (hasProducts) {
-    parts.push(
-      "When the user message begins with [Relevant catalog products:], those products have been " +
-      "pre-selected for relevance to the query. Recommend appropriate ones naturally in your response. " +
-      "At the very end of your response output each recommended product as a bare RECOMMENDATION line with no heading, section label, or bullet before it:\n" +
-      "RECOMMENDATION: <productName> | <one-sentence reason this fits the user's need> | | <productPageUrl>",
+    contract.push(
+      "RECOMMENDATION lines: When the user's message begins with [Relevant catalog products:], those products were pre-selected as relevant to the query. " +
+      "For every catalog product you mention or that clearly fits the user's need, you MUST emit a RECOMMENDATION line — this is required, not optional, whenever the query is about products, solutions, or what to buy/use (emit at least the 1-3 best matches). " +
+      "Do NOT emit a RECOMMENDATION line for a purely informational, support, or troubleshooting question where no product fits.\n" +
+      "RECOMMENDATION: <exact productName from the catalog list> | <one-sentence reason this fits the user's need> | | <productPageUrl from the catalog list>",
     );
   }
 
-  // Long-form content surfacing
-  parts.push(
-    "When your search returns educational articles, application notes, guides, knowledge-base entries, or blog posts " +
-    "(URLs containing paths like /knowledge-center/, /blog/, /resources/, /guides/, /learn/), " +
-    "you MUST include them as bare RESOURCE lines at the very end — after RECOMMENDATION lines, no heading or bullet:\n" +
-    "RESOURCE: <articleTitle> | <one-sentence summary of why it is relevant> | <url>\n" +
-    "Use the exact URL returned by your search. Include up to 3.",
+  contract.push(
+    "RESOURCE lines: When your search returns educational articles, application notes, guides, knowledge-base entries, or blog posts " +
+    "(URLs containing paths like /knowledge-center/, /blog/, /resources/, /guides/, /learn/), emit them as RESOURCE lines (up to 3), using the exact URL returned by your search:\n" +
+    "RESOURCE: <articleTitle> | <one-sentence summary of why it is relevant> | <url>",
   );
 
-  // Suggested follow-up format (always last so the parser can extract them cleanly)
-  parts.push(
-    "At the very end of every response, append 2-3 suggested follow-up questions as bare SUGGESTED: lines " +
-    "with no header, label, or preamble before them:\n" +
-    "SUGGESTED: <follow-up question>\n" +
-    "SUGGESTED: <follow-up question>",
+  contract.push(
+    "SUGGESTED lines: Always end with 2-3 suggested follow-up prompts phrased as the user would type them:\n" +
+    "SUGGESTED: <follow-up prompt>\n" +
+    "SUGGESTED: <follow-up prompt>",
   );
+
+  parts.push(contract.join("\n\n"));
 
   return parts.filter(Boolean).join("\n\n");
 }
@@ -664,11 +700,22 @@ Deno.serve(async (req) => {
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (trimmed.startsWith("RECOMMENDATION:")) {
-      // Parse RECOMMENDATION lines wherever they appear in the response
+      // Parse RECOMMENDATION lines wherever they appear in the response. The model
+      // formats these inconsistently: sometimes the documented 4-field form
+      // (name | reason | price | url) and sometimes 3 fields (name | reason | url),
+      // dropping the usually-empty price. Locate the URL field rather than assuming
+      // a fixed index, so both forms produce a card (a strict length check here was
+      // silently dropping every 3-field line — e.g. all access-point recs).
       const parts = trimmed.replace(/^RECOMMENDATION:\s*/, "").split("|").map((p) => p.trim());
-      if (parts.length >= 4) {
-        const realUrl = productNameUrlMap.get(parts[0].toLowerCase()) || sanitizeUrl(parts[3]);
-        recommendations.push({ title: parts[0], reason: parts[1], price: parts[2], url: realUrl, image: productImageMap.get(realUrl) || "" });
+      if (parts.length >= 3) {
+        let urlIdx = -1;
+        for (let j = parts.length - 1; j >= 0; j--) { if (/https?:\/\//.test(parts[j])) { urlIdx = j; break; } }
+        if (urlIdx === -1) urlIdx = parts.length - 1;
+        const title = parts[0];
+        const reason = urlIdx > 1 ? parts[1] : "";
+        const price = urlIdx >= 3 ? parts[2] : "";
+        const realUrl = resolveCatalogUrl(title, productNameUrlMap) || sanitizeUrl(parts[urlIdx]);
+        recommendations.push({ title, reason, price, url: realUrl, image: productImageMap.get(realUrl) || "" });
       }
     } else if (trimmed.startsWith("RESOURCE:")) {
       // Parse RESOURCE lines wherever they appear in the response
