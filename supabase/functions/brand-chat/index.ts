@@ -93,6 +93,7 @@ const INJECT_TOP_N = 12;    // how many of those are injected into the prompt fo
 const REC_MAX = 15;         // max recommendation cards returned
 const REC_REL_DELTA = 0.15; // keep matches within this similarity window below the top match
 const REC_ABS_FLOOR = 0.30; // ...but never surface anything below this absolute similarity
+const REC_REASON_MAX = 140; // max chars for a card's reason line (keeps cards compact)
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -772,13 +773,24 @@ Deno.serve(async (req) => {
     const reasonByUrl = new Map(recommendations.map((r) => [r.url, r.reason]));
     const topSim = retrievedProducts[0].similarity ?? 0;
     const floor = Math.max(REC_ABS_FLOOR, topSim - REC_REL_DELTA);
-    const clipReason = (s: string) => (s.length > 180 ? `${s.slice(0, 180).replace(/\s+\S*$/, "")}…` : s);
+    // Build a short, human card reason. Catalog descriptions front-load a
+    // "Label: value | … | Label: value. " attribute block (strength, NDC, brand
+    // ref, unit size) for embedding signal — strip that so the card shows what the
+    // product actually is/treats (strength is already in the title), then clip.
+    const cardReason = (s: string) => {
+      const stripped = s.replace(
+        /^(?:[A-Za-z][A-Za-z ]*:\s*[^|]*\|\s*)+[A-Za-z][A-Za-z ]*:\s*[^.]*\.\s*/,
+        "",
+      ).trim();
+      const t = stripped || s.trim();
+      return t.length > REC_REASON_MAX ? `${t.slice(0, REC_REASON_MAX).replace(/\s+\S*$/, "")}…` : t;
+    };
     const comprehensive = retrievedProducts
       .filter((p) => (p.similarity ?? 0) >= floor)
       .slice(0, REC_MAX)
       .map((p) => ({
         title: p.product_name,
-        reason: reasonByUrl.get(p.product_page_url) || clipReason(p.product_description),
+        reason: cardReason(reasonByUrl.get(p.product_page_url) || p.product_description),
         price: "",
         url: p.product_page_url,
         image: p.product_image_url || "",
