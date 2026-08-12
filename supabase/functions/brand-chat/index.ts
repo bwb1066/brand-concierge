@@ -85,6 +85,15 @@ const RESPONSE_TOKEN_LIMITS: Record<string, number> = {
 // Fallback cap when response_length is empty/unknown — never leave output unbounded.
 const DEFAULT_MAX_OUTPUT_TOKENS = 1200;
 
+// ── Product retrieval / recommendation-card tuning ──────────────────────────
+// Cards are built deterministically from vector similarity (not the model's
+// curation, which is inconsistent and was capped at whatever it chose to emit).
+const CANDIDATE_TOP_N = 50; // vector matches pulled per query (the card candidate pool)
+const INJECT_TOP_N = 12;    // how many of those are injected into the prompt for prose grounding
+const REC_MAX = 15;         // max recommendation cards returned
+const REC_REL_DELTA = 0.15; // keep matches within this similarity window below the top match
+const REC_ABS_FLOOR = 0.30; // ...but never surface anything below this absolute similarity
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 async function fetchMeta(url: string): Promise<{ description: string; image: string; ok: boolean }> {
@@ -571,7 +580,7 @@ Deno.serve(async (req) => {
   const productByUrlMap = new Map<string, { name: string; description: string }>();
   let retrievedProducts: Awaited<ReturnType<typeof retrieveProducts>> = [];
   if (productCount > 0 && body.site_key) {
-    retrievedProducts = await retrieveProducts(sb, body.site_key, message);
+    retrievedProducts = await retrieveProducts(sb, body.site_key, message, body.top_n || CANDIDATE_TOP_N);
     const products = retrievedProducts;
     for (const p of products) {
       if (p.product_image_url) productImageMap.set(p.product_page_url, p.product_image_url);
@@ -580,9 +589,12 @@ Deno.serve(async (req) => {
     }
     if (products.length > 0) {
       // Cap each description so the injected block stays token-lean (the whole
-      // system prompt is already large; unbounded descriptions add up fast).
+      // system prompt is already large; unbounded descriptions add up fast). Only
+      // the top INJECT_TOP_N ground the model's prose — the card set is built from
+      // the full candidate pool separately, so we don't need to inject all of it.
       const clip = (s: string) => (s.length > 280 ? `${s.slice(0, 280).replace(/\s+\S*$/, "")}…` : s);
       const productBlock = products
+        .slice(0, INJECT_TOP_N)
         .map((p, i) => `${i + 1}. ${p.product_name}: ${clip(p.product_description)}\n   URL: ${p.product_page_url}`)
         .join("\n\n");
       queryInput = `[Relevant catalog products:]\n${productBlock}\n\n[User question:]\n${message}`;
@@ -748,58 +760,31 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Fill in missing images from DB for catalog products not in the top-5
-  const recsNeedingImages = recommendations.filter((r) => !r.image && r.url);
-  if (recsNeedingImages.length > 0 && body.site_key) {
-    const { data: imgRows } = await sb
-      .from("brand_products")
-      .select("product_page_url, product_image_url")
-      .eq("site_key", body.site_key)
-      .in("product_page_url", recsNeedingImages.map((r) => r.url));
-    if (imgRows) {
-      const dbImageMap = new Map(imgRows.map((p) => [p.product_page_url, p.product_image_url]));
-      for (const rec of recsNeedingImages) {
-        const img = dbImageMap.get(rec.url);
-        if (img) rec.image = img;
-      }
-    }
-  }
-
-  // Intent-gated recommendation fallback.
-  // The model curates RECOMMENDATION cards, but a safety-oriented persona can
-  // route a clear provider request to programs and emit no cards. When (a) the
-  // user is explicitly asking for a person and (b) the model returned none, fill
-  // from the top vector matches above a similarity floor. Both gates are required
-  // — intent without a relevant match, or a relevant match without intent, won't
-  // fire — which keeps off-topic and symptom-only queries from surfacing cards.
-  const PROVIDER_INTENT = new RegExp(
-    "\\b(specialists?|doctors?|physicians?|surgeons?|neurosurgeons?|providers?|clinicians?|practitioners?|orthopa?edists?)\\b"
-    + "|\\bwho\\s+(can\\s+)?(treat|treats|see|sees|specializ\\w*)\\b"
-    + "|\\b(recommend|refer|find|see)\\b[^.?!]{0,30}\\b(doctor|physician|specialist|surgeon|provider|clinician|someone)\\b",
-    "i",
-  );
-  const RECOMMENDATION_SIMILARITY_FLOOR = 0.25;
-  const RECOMMENDATION_FALLBACK_MAX = 10;
-  if (
-    recommendations.length === 0
-    && typeof message === "string"
-    && PROVIDER_INTENT.test(message)
-    && retrievedProducts.length > 0
-  ) {
-    for (const p of retrievedProducts
-      .filter((p) => (p.similarity ?? 0) >= RECOMMENDATION_SIMILARITY_FLOOR)
-      .slice(0, RECOMMENDATION_FALLBACK_MAX)) {
-      const reason = p.product_description.length > 200
-        ? `${p.product_description.slice(0, 200).replace(/\s+\S*$/, "")}…`
-        : p.product_description;
-      recommendations.push({
+  // Comprehensive recommendation cards (deterministic, similarity-driven).
+  // The model's RECOMMENDATION lines are inconsistent and self-capped, so instead
+  // of trusting them for the card SET we build it from the vector matches: keep
+  // every product within REC_REL_DELTA of the top match (and above REC_ABS_FLOOR),
+  // sorted by similarity, capped at REC_MAX. A named-drug query whose exact
+  // strengths sit in a similarity gap (e.g. aripiprazole) stays tight; a broad
+  // category (e.g. blood pressure) fills up to the cap. We reuse the model's
+  // one-line reason when it wrote one for that product, else the catalog blurb.
+  if (retrievedProducts.length > 0) {
+    const reasonByUrl = new Map(recommendations.map((r) => [r.url, r.reason]));
+    const topSim = retrievedProducts[0].similarity ?? 0;
+    const floor = Math.max(REC_ABS_FLOOR, topSim - REC_REL_DELTA);
+    const clipReason = (s: string) => (s.length > 180 ? `${s.slice(0, 180).replace(/\s+\S*$/, "")}…` : s);
+    const comprehensive = retrievedProducts
+      .filter((p) => (p.similarity ?? 0) >= floor)
+      .slice(0, REC_MAX)
+      .map((p) => ({
         title: p.product_name,
-        reason,
+        reason: reasonByUrl.get(p.product_page_url) || clipReason(p.product_description),
         price: "",
         url: p.product_page_url,
         image: p.product_image_url || "",
-      });
-    }
+      }));
+    recommendations.length = 0;
+    recommendations.push(...comprehensive);
   }
 
   // Merge AI-output RESOURCE: lines with auto-detected editorial citation URLs
