@@ -68,6 +68,10 @@ Deno.serve(async (req) => {
   if (req.method === "POST") {
     const body = await req.json();
     const { site_key, products } = body as { site_key: string; products: Product[] };
+    // Append mode keeps existing rows (no delete-first), so catalogs larger than
+    // MAX_PRODUCTS can be uploaded across several requests: send the first chunk
+    // normally (replaces the catalog), then the rest with append:true.
+    const append = body.append === true || body.mode === "append";
 
     if (!site_key) return json({ error: "site_key required" }, 400);
     if (!Array.isArray(products) || products.length === 0) {
@@ -82,11 +86,13 @@ Deno.serve(async (req) => {
       }
     }
 
-    const { error: delErr } = await sb
-      .from("brand_products")
-      .delete()
-      .eq("site_key", site_key);
-    if (delErr) return json({ error: delErr.message }, 500);
+    if (!append) {
+      const { error: delErr } = await sb
+        .from("brand_products")
+        .delete()
+        .eq("site_key", site_key);
+      if (delErr) return json({ error: delErr.message }, 500);
+    }
 
     let inserted = 0;
     for (let i = 0; i < products.length; i += EMBED_BATCH) {
