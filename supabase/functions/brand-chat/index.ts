@@ -29,6 +29,7 @@ interface BrandConfig {
   product_advisory_keywords: string | null;
   brand_expression: Record<string, string> | null;
   response_length: string | null;
+  commerce_enabled: boolean | null;
 }
 
 interface Citation {
@@ -313,6 +314,13 @@ function buildSystemPrompt(config: BrandConfig, hasProducts: boolean): string {
       "Do NOT emit a RECOMMENDATION line for a purely informational, support, or troubleshooting question where no product fits.\n" +
       "RECOMMENDATION: <exact productName from the catalog list> | <one-sentence reason this fits the user's need> | | <productPageUrl from the catalog list>",
     );
+    if (config.commerce_enabled) {
+      contract.push(
+        "CATALOG-ONLY MODE: Recommend, name, and link ONLY products from the [Relevant catalog products:] list in the user's message. " +
+        "Do not introduce or reference products that are not in that list, and do not rely on outside web knowledge for product specifics. " +
+        "If nothing in the list fits, say so plainly and offer to refine the search.",
+      );
+    }
   }
 
   contract.push(
@@ -530,6 +538,7 @@ Deno.serve(async (req) => {
       product_advisory_keywords: null,
       brand_expression: null,
       response_length: null,
+      commerce_enabled: null,
     };
   } else if (body.site_key) {
     const looked = await getConfig(sb, body.site_key);
@@ -558,6 +567,7 @@ Deno.serve(async (req) => {
       product_advisory_keywords: null,
       brand_expression: null,
       response_length: null,
+      commerce_enabled: null,
     };
   }
 
@@ -607,8 +617,12 @@ Deno.serve(async (req) => {
     .map((d: string) => d.replace(/^https?:\/\//, "").replace(/\/.*$/, "").trim())
     .filter(Boolean);
 
+  // Commerce brands answer deterministically from their indexed catalog only:
+  // skip live web_search (recommendation cards are already built from the vector
+  // matches). Non-commerce brands are unchanged.
+  const catalogOnly = config.commerce_enabled === true;
   const brandTools: Record<string, unknown>[] = [];
-  if (cleanDomains.length) {
+  if (cleanDomains.length && !catalogOnly) {
     brandTools.push({ type: "web_search", filters: { allowed_domains: cleanDomains } });
   }
   if (config.vector_store_id && config.vector_store_id.startsWith("vs_")) {
@@ -633,8 +647,8 @@ Deno.serve(async (req) => {
   const combinedUrls = new Map(brandUrls);
   let lastDebug = brandDebug;
 
-  // Optional open web search
-  if (config.open_search_context) {
+  // Optional open web search (never for catalog-only commerce brands)
+  if (config.open_search_context && !catalogOnly) {
     const webInstr = webSearchInstructions(config.open_search_context);
     const { text: webText, urlMap: webUrls, debug: webDebug } =
       await callOpenAI(message, webInstr, [{ type: "web_search" }], undefined, maxOutputTokens);
