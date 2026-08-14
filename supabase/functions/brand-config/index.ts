@@ -85,6 +85,10 @@ Deno.serve(async (req) => {
       contact_label:              body.contact_label || null,
       voice_enabled:              body.voice_enabled ?? false,
       voice:                      body.voice || null,
+      commerce_enabled:           body.commerce_enabled ?? false,
+      currency:                   body.currency || "USD",
+      facet_hints:                body.facet_hints || [],
+      tool_desc:                  body.tool_desc || null,
     };
 
     const { data, error } = await sb
