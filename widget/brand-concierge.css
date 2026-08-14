@@ -375,6 +375,22 @@
 
 .bc-recommendation-cta { font-size: 12px; color: var(--bc-link, #12417c); font-weight: 500; }
 
+/* Commerce add-to-quote control (only rendered when a host commerce bridge
+   is present; absent on non-commerce brands). */
+.bc-recommendation-add {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bc-on-primary, #fff);
+  background: var(--bc-primary, #12417c);
+  border-radius: 6px;
+  padding: 4px 10px;
+  margin-left: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.bc-recommendation-add:hover { background: var(--bc-primary-hover, #0c2d56); }
+
 /* resource cards (long-form content) */
 .bc-resources {
   display: flex;

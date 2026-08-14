@@ -170,6 +170,7 @@ async function loadConfig() {
     cfg.theme = c.theme && typeof c.theme === 'object' ? c.theme : {};
     cfg.voiceEnabled = c.voice_enabled === true;
     cfg.voice = c.voice || '';
+    cfg.commerceEnabled = c.commerce_enabled;
     if (cfg.voiceEnabled) loadVoiceMode(); else voiceMode = false;
     heygenAvatarId = c.heygen_avatar_id || null;
     configLoaded = true;
@@ -381,6 +382,21 @@ async function startRecording(input, messages, micBtn) {
 }
 
 /* ── messages ─────────────────────────────────────────── */
+/**
+ * Cross-surface commerce bridge. The host page exposes a generic
+ * `window.brandCommerce` store only when a commerce block is present, so this
+ * returns null (and the widget is unchanged) on brands without commerce.
+ * A brand can also force it off with `commerce_enabled: false` in its config.
+ * Backwards compatible and reusable: any replica site that ships the commerce
+ * store gets concierge add-to-quote with no widget changes.
+ */
+function commerceBridge() {
+  const bridge = (typeof window !== 'undefined') ? window.brandCommerce : null;
+  if (!bridge || typeof bridge.addByQuery !== 'function') return null;
+  if (cfg.commerceEnabled === false) return null;
+  return bridge;
+}
+
 function addMessage(container, text, role, citations, suggestions, recommendations, bookingUrl, messageIdx, resources, spoken) {
   container.closest('.bc-dialog')?.classList.add('has-messages');
   const msg = document.createElement('div');
@@ -441,6 +457,29 @@ function addMessage(container, text, role, citations, suggestions, recommendatio
             <span class="bc-recommendation-price">${u.price}</span>
             <span class="bc-recommendation-cta">View in new window</span>
           </div>`;
+        const bridge = commerceBridge();
+        if (bridge) {
+          const footer = card.querySelector('.bc-recommendation-footer');
+          const add = document.createElement('span');
+          add.className = 'bc-recommendation-add';
+          add.setAttribute('role', 'button');
+          add.setAttribute('tabindex', '0');
+          const label = bridge.ctaLabel || 'Add to quote';
+          add.textContent = label;
+          const doAdd = async (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            add.textContent = '…';
+            const res = await bridge.addByQuery(u.title, 'concierge');
+            add.textContent = res && !res.error ? 'Added ✓' : 'Not in catalog';
+            setTimeout(() => { add.textContent = label; }, 1600);
+          };
+          add.addEventListener('click', doAdd);
+          add.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter' || ev.key === ' ') doAdd(ev);
+          });
+          footer.append(add);
+        }
         recommendationWrap.append(card);
       });
       msg.append(recommendationWrap);
