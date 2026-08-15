@@ -379,9 +379,9 @@
    is present; absent on non-commerce brands). */
 .bc-recommendation-add {
   font-size: 12px;
-  font-weight: 600;
-  color: var(--bc-on-primary, #fff);
-  background: var(--bc-primary, #12417c);
+  font-weight: 700;
+  color: var(--bc-cta-ink, #131313);
+  background: var(--bc-cta, var(--bc-primary, #12417c));
   border-radius: 6px;
   padding: 4px 10px;
   margin-left: 8px;
@@ -389,7 +389,12 @@
   cursor: pointer;
 }
 
-.bc-recommendation-add:hover { background: var(--bc-primary-hover, #0c2d56); }
+.bc-recommendation-add:hover { filter: brightness(0.94); }
+
+.bc-recommendation-add.is-added {
+  background: var(--bc-cta-added, #1a7f37);
+  color: var(--bc-cta-added-ink, #fff);
+}
 
 /* resource cards (long-form content) */
 .bc-resources {

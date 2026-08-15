@@ -188,6 +188,10 @@ const THEME_VARS = {
   userBg: '--bc-user-bg',
   userInk: '--bc-user-ink',
   dialogRadius: '--bc-dialog-radius',
+  cta: '--bc-cta',
+  ctaInk: '--bc-cta-ink',
+  ctaAdded: '--bc-cta-added',
+  ctaAddedInk: '--bc-cta-added-ink',
 };
 
 /**
@@ -471,8 +475,10 @@ function addMessage(container, text, role, citations, suggestions, recommendatio
             ev.stopPropagation();
             add.textContent = '…';
             const res = await bridge.addByQuery(u.title, 'concierge');
-            add.textContent = res && !res.error ? 'Added ✓' : 'Not in catalog';
-            setTimeout(() => { add.textContent = label; }, 1600);
+            const okAdded = !!(res && !res.error);
+            add.textContent = okAdded ? 'Added ✓' : 'Not in catalog';
+            if (okAdded) add.classList.add('is-added');
+            setTimeout(() => { add.textContent = label; add.classList.remove('is-added'); }, 1600);
           };
           add.addEventListener('click', doAdd);
           add.addEventListener('keydown', (ev) => {
