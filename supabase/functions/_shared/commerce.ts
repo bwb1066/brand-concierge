@@ -41,6 +41,32 @@ export async function resolveBuyer(sb: any, siteKey: string, email?: string | nu
   return data || null;
 }
 
+// Single source of truth is brand_products (the concierge catalog), enriched
+// with commerce columns. Map its column names to the commerce shape the rest of
+// the code + the frontend expect. A row is "buyable" only when it has a sku and
+// a list_price, so old concierge-only uploads never render as broken cards.
+function mapRow(r: any) {
+  if (!r) return null;
+  return {
+    sku: r.sku,
+    name: r.product_name,
+    description: r.product_description,
+    image_url: r.product_image_url,
+    product_url: r.product_page_url,
+    category: r.category,
+    list_price: r.list_price,
+    currency: r.currency,
+    uom: r.uom || "each",
+    specs: r.specs || {},
+    price_breaks: r.price_breaks || [],
+    stock_qty: r.stock_qty ?? 0,
+    lead_time_days: r.lead_time_days ?? 0,
+    min_order_qty: r.min_order_qty || 1,
+    restricted: r.restricted === true,
+    restriction: r.restriction,
+  };
+}
+
 export async function searchProducts(
   sb: any,
   siteKey: string,
@@ -48,9 +74,10 @@ export async function searchProducts(
   buyer: any = null,
 ) {
   const { query = "", filters = null, limit = 24 } = opts;
-  const { data } = await sb.from("commerce_catalog").select("*")
-    .eq("site_key", siteKey).eq("active", true);
-  let rows = (data || []).filter((p: any) => visibleTo(p, buyer));
+  const { data } = await sb.from("brand_products").select("*")
+    .eq("site_key", siteKey).eq("active", true)
+    .not("sku", "is", null).not("list_price", "is", null);
+  let rows = (data || []).map(mapRow).filter((p: any) => visibleTo(p, buyer));
   if (query) {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
     rows = rows.filter((p: any) => {
@@ -67,10 +94,11 @@ export async function searchProducts(
 }
 
 export async function getProduct(sb: any, siteKey: string, sku: string, buyer: any = null) {
-  const { data } = await sb.from("commerce_catalog").select("*")
-    .eq("site_key", siteKey).eq("sku", String(sku)).maybeSingle();
-  if (!data || !visibleTo(data, buyer)) return null;
-  return data;
+  const { data } = await sb.from("brand_products").select("*")
+    .eq("site_key", siteKey).eq("sku", String(sku)).limit(1);
+  const product = mapRow((data || [])[0]);
+  if (!product || !visibleTo(product, buyer)) return null;
+  return product;
 }
 
 export async function checkAvailability(sb: any, siteKey: string, sku: string, qty: number, buyer: any = null) {

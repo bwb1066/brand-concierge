@@ -40,6 +40,10 @@ interface Product {
   productPageUrl: string;
   productDescription: string;
   productImageUrl?: string;
+  // Optional commerce fields (single source of truth). Absent → DB defaults/null,
+  // so a product stays concierge-only until it's given a sku + list_price.
+  // deno-lint-ignore no-explicit-any
+  [key: string]: any;
 }
 
 Deno.serve(async (req) => {
@@ -98,14 +102,36 @@ Deno.serve(async (req) => {
     for (let i = 0; i < products.length; i += EMBED_BATCH) {
       const batch = products.slice(i, i + EMBED_BATCH);
       const rows = await Promise.all(
-        batch.map(async (p) => ({
-          site_key,
-          product_name: p.productName,
-          product_page_url: p.productPageUrl,
-          product_description: p.productDescription,
-          product_image_url: p.productImageUrl || null,
-          embedding: await embedText(`${p.productName}: ${p.productDescription}`),
-        })),
+        batch.map(async (p) => {
+          // deno-lint-ignore no-explicit-any
+          const row: any = {
+            site_key,
+            product_name: p.productName,
+            product_page_url: p.productPageUrl,
+            product_description: p.productDescription,
+            product_image_url: p.productImageUrl || null,
+            embedding: await embedText(`${p.productName}: ${p.productDescription}`),
+          };
+          // Optional commerce fields (camelCase or snake_case); set only when
+          // provided so old payloads fall back to DB defaults.
+          const commerce: Record<string, unknown> = {
+            sku: p.sku,
+            category: p.category,
+            list_price: p.listPrice ?? p.list_price,
+            currency: p.currency,
+            uom: p.uom,
+            specs: p.specs,
+            price_breaks: p.priceBreaks ?? p.price_breaks,
+            stock_qty: p.stockQty ?? p.stock_qty,
+            lead_time_days: p.leadTimeDays ?? p.lead_time_days,
+            min_order_qty: p.minOrderQty ?? p.min_order_qty,
+            restricted: p.restricted,
+            restriction: p.restriction,
+            active: p.active,
+          };
+          Object.entries(commerce).forEach(([k, v]) => { if (v !== undefined) row[k] = v; });
+          return row;
+        }),
       );
       const { error: insErr } = await sb.from("brand_products").insert(rows);
       if (insErr) return json({ error: insErr.message }, 500);
