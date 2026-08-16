@@ -1,0 +1,9 @@
+name = "eo-commerce-mcp"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+# No bindings/state needed — the worker is a stateless OAuth front door + reverse
+# proxy to the Supabase commerce-mcp function. Deploy:
+#   cd mcp-oauth-worker && npx wrangler login && npx wrangler deploy
+# The connector URL for Claude.ai is then:
+#   https://eo-commerce-mcp.<your-subdomain>.workers.dev/mcp?site_key=eo-concept-3b&buyer=acme-photonics
