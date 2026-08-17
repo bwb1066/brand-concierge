@@ -654,6 +654,22 @@ async function sendMessage(messagesContainer, text) {
     const spoken = data.spoken_summary || '';
     if (shouldShowContact(text)) suggestions.push('__CONTACT__');
 
+    // Tenant-neutral host-page hook: let the embedding site observe each
+    // assistant turn (e.g. to emit an Adobe Web SDK / analytics event). The
+    // host does any vendor-specific mapping; the widget stays generic.
+    try {
+      document.dispatchEvent(new CustomEvent('brand-concierge:message', {
+        detail: {
+          role: 'assistant',
+          siteKey: cfg.siteKey,
+          prompt: text,
+          text: reply,
+          recommendations,
+          suggestions,
+        },
+      }));
+    } catch (e) { /* a host hook must never break the chat */ }
+
     if (heygenEnabled && heygenRoom) {
       heygenSpeak(reply);
     } else {
