@@ -67,6 +67,22 @@ function mapRow(r: any) {
   };
 }
 
+// Apply a buyer's negotiated price book: the contracted unit price replaces
+// list price and supersedes volume breaks. No-op when the buyer has no contract
+// for the SKU. The effective price is written to list_price so the frontend
+// (whose REMOTE buyer is identity-only, no price book) renders it directly.
+function applyBuyer(product: any, buyer: any) {
+  if (!product || !buyer?.price_book) return product;
+  const contract = buyer.price_book[product.sku];
+  if (contract == null) return product;
+  return {
+    ...product,
+    list_price: Number(contract),
+    price_breaks: [],
+    contract_price: Number(contract),
+  };
+}
+
 export async function searchProducts(
   sb: any,
   siteKey: string,
@@ -90,6 +106,29 @@ export async function searchProducts(
     rows = rows.filter((p: any) => Object.entries(filters).every(([k, v]) =>
       String(p.specs?.[k] ?? "").toLowerCase().includes(String(v).toLowerCase())));
   }
+  return rows.slice(0, limit).map((p: any) => applyBuyer(p, buyer));
+}
+
+// Content-as-data: resources (app notes / guides) tagged by category + topic.
+// Used by the decisioning layer to surface knowledge relevant to viewed products.
+export async function searchResources(
+  sb: any,
+  siteKey: string,
+  opts: { query?: string; category?: string | null; tags?: string[] | null; limit?: number },
+) {
+  const { query = "", category = null, tags = null, limit = 8 } = opts;
+  let q = sb.from("brand_resources").select("*").eq("site_key", siteKey).eq("active", true);
+  if (category) q = q.eq("category", category);
+  if (tags && tags.length) q = q.overlaps("tags", tags);
+  const { data } = await q;
+  let rows = data || [];
+  if (query) {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    rows = rows.filter((r: any) => {
+      const hay = [r.title, r.teaser, r.category, ...(r.tags || [])].join(" ").toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    });
+  }
   return rows.slice(0, limit);
 }
 
@@ -98,7 +137,7 @@ export async function getProduct(sb: any, siteKey: string, sku: string, buyer: a
     .eq("site_key", siteKey).eq("sku", String(sku)).limit(1);
   const product = mapRow((data || [])[0]);
   if (!product || !visibleTo(product, buyer)) return null;
-  return product;
+  return applyBuyer(product, buyer);
 }
 
 export async function checkAvailability(sb: any, siteKey: string, sku: string, qty: number, buyer: any = null) {
