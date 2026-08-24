@@ -1,0 +1,13 @@
+# Wrangler's local state/cache. wrangler-account.json carries the Cloudflare
+# account id and this repo is public, so it must never be committed again.
+.wrangler/
+
+# Local env / secrets — Supabase and Cloudflare secrets are set via the CLI,
+# never checked in.
+.env
+.env.*
+!.env.example
+
+node_modules/
+.DS_Store
+*.log
