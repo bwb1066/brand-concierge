@@ -593,6 +593,14 @@ async function sendMessage(messagesContainer, text) {
   addMessage(messagesContainer, text, 'user');
   history.push({ role: 'user', content: text });
 
+  // Tenant-neutral host-page hook: let the embedding site observe each user
+  // turn too, not just the assistant's reply (e.g. to track prompts typed).
+  try {
+    document.dispatchEvent(new CustomEvent('brand-concierge:message', {
+      detail: { role: 'user', siteKey: cfg.siteKey, prompt: text },
+    }));
+  } catch (e) { /* host page listener errors shouldn't break the widget */ }
+
   if (isEmail(text)) {
     const reply = `A ${cfg.brandName || ''} representative will be in touch very soon!`;
     addMessage(messagesContainer, reply, 'assistant');
