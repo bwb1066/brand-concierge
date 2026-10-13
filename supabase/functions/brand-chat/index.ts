@@ -98,6 +98,40 @@ const REC_REASON_MAX = 140; // max chars for a card's reason line (keeps cards c
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+// An explicit "how many" in the shopper's message ("top 3", "two or three
+// options", "just one", "your top pick") caps the recommendation cards; without
+// one, the similarity window + REC_MAX decide. Money ("under $60") and sizes
+// ("1-inch") are not counts. Returns null when no count was asked for.
+const COUNT_WORDS: Record<string, number> = {
+  one: 1, single: 1, two: 2, couple: 2, pair: 2, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+};
+const COUNT_TOKEN = "(\\d{1,2}|one|single|two|couple|pair|three|four|five|six|seven|eight|nine|ten)";
+const COUNT_NOUN = "(?:options?|choices?|picks?|products?|items?|recommendations?|suggestions?|ideas?|ones?|models?|alternatives?)";
+export function requestedCardLimit(message: string): number | null {
+  const m = ` ${message.toLowerCase().replace(/[$€£]\s*\d[\d,.]*/g, " ")} `;
+  const toNum = (t: string) => (/^\d+$/.test(t) ? parseInt(t, 10) : COUNT_WORDS[t]);
+  const patterns = [
+    // "two or three options", "2-3 picks", "3 to 5 products" -> upper bound
+    new RegExp(`\\b${COUNT_TOKEN}\\s*(?:or|to|-|–)\\s*${COUNT_TOKEN}\\s+(?:\\w+\\s+)?${COUNT_NOUN}\\b`),
+    new RegExp(`\\b(?:top|best|only|just|up to|at most|no more than|max(?:imum)?(?: of)?|limit(?: it)? to)\\s+${COUNT_TOKEN}(?:\\s*(?:or|to|-|–)\\s*${COUNT_TOKEN})?\\b`),
+    // "3 options", "a couple of picks", "two dryers I'd like"
+    new RegExp(`\\b(?:a\\s+)?${COUNT_TOKEN}(?:\\s+of)?\\s+(?:\\w+\\s+)?${COUNT_NOUN}\\b`),
+    // "show me 2 dryers", "recommend three flat irons"
+    new RegExp(`\\b(?:show|give|recommend|suggest|list|pick|find|send)(?:\\s+(?:me|us))?\\s+(?:the\\s+)?${COUNT_TOKEN}\\s+(?:[a-z]+\\s+)?[a-z]+s\\b`),
+  ];
+  for (const re of patterns) {
+    const hit = m.match(re);
+    if (!hit) continue;
+    const nums = hit.slice(1).filter(Boolean).map(toNum).filter((n) => n && n >= 1 && n <= 10);
+    if (nums.length) return Math.max(...nums);
+  }
+  // A single pick ("your top pick", "just one") only when no larger count was asked for.
+  if (/\b(?:my|your|the|a) (?:top|best|single) (?:pick|choice|option|recommendation)\b/.test(m)
+    || /\b(?:just|only) (?:one|1)\b/.test(m)) return 1;
+  return null;
+}
+
 async function fetchMeta(url: string): Promise<{ description: string; image: string; ok: boolean }> {
   try {
     const resp = await fetch(url, {
@@ -586,6 +620,7 @@ Deno.serve(async (req) => {
 
   // Retrieve relevant products, build image map, inject into query
   let queryInput = message;
+  const cardLimit = requestedCardLimit(message);
   const productImageMap = new Map<string, string>();
   const productNameUrlMap = new Map<string, string>();
   const productByUrlMap = new Map<string, { name: string; description: string }>();
@@ -609,6 +644,10 @@ Deno.serve(async (req) => {
         .map((p, i) => `${i + 1}. ${p.product_name}: ${clip(p.product_description)}\n   URL: ${p.product_page_url}`)
         .join("\n\n");
       queryInput = `[Relevant catalog products:]\n${productBlock}\n\n[User question:]\n${message}`;
+      if (cardLimit) {
+        queryInput += `\n\n[The user asked for at most ${cardLimit} product${cardLimit === 1 ? "" : "s"}: `
+          + `recommend exactly ${cardLimit}, best first, and emit only that many RECOMMENDATION lines.]`;
+      }
     }
   }
 
@@ -799,9 +838,17 @@ Deno.serve(async (req) => {
       const t = stripped || s.trim();
       return t.length > REC_REASON_MAX ? `${t.slice(0, REC_REASON_MAX).replace(/\s+\S*$/, "")}…` : t;
     };
-    const comprehensive = retrievedProducts
-      .filter((p) => (p.similarity ?? 0) >= floor)
-      .slice(0, REC_MAX)
+    // Asked-for count: lead with the model's own picks (in its order), then fill
+    // by similarity, and stop at the requested number.
+    let pool = retrievedProducts.filter((p) => (p.similarity ?? 0) >= floor);
+    if (cardLimit) {
+      const picked = recommendations
+        .map((r) => retrievedProducts.find((p) => p.product_page_url === r.url))
+        .filter((p): p is (typeof retrievedProducts)[number] => !!p);
+      pool = [...new Set([...picked, ...pool])];
+    }
+    const comprehensive = pool
+      .slice(0, cardLimit ?? REC_MAX)
       .map((p) => ({
         title: p.product_name,
         reason: cardReason(reasonByUrl.get(p.product_page_url) || p.product_description),
