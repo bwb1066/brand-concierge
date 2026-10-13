@@ -11,3 +11,6 @@
 node_modules/
 .DS_Store
 *.log
+
+# Supabase CLI link metadata — carries the org id; this repo is public.
+supabase/.temp/linked-project.json
